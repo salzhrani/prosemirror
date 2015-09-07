@@ -29,7 +29,7 @@ export class ProseMirror {
     this.setDocInner(opts.docFormat ? convertFrom(opts.doc, opts.docFormat, {document}) : opts.doc)
     draw(this, this.doc)
     this.content.contentEditable = true
-
+    this.content.style.whiteSpace = 'pre-wrap'
     this.mod = Object.create(null)
     this.operation = null
     this.flushScheduled = false
