@@ -10,16 +10,8 @@ export function registerCommand(name, func) {
 }
 
 export function execCommand(pm, name) {
-  let ext = pm.input.commandExtensions[name]
-  if (ext && ext.high) for (let i = 0; i < ext.high.length; i++)
-    if (ext.high[i](pm) !== false) return true
-  if (ext && ext.normal) for (let i = 0; i < ext.normal.length; i++)
-    if (ext.normal[i](pm) !== false) return true
   let base = commands[name]
-  if (base && base(pm) !== false) return true
-  if (ext && ext.low) for (let i = 0; i < ext.low.length; i++)
-    if (ext.low[i](pm) !== false) return true
-  return false
+  return !!(base && base(pm) !== false)
 }
 
 function clearSel(pm) {
@@ -84,11 +76,6 @@ function delBlockBackward(pm, tr, pos) {
     // Any other nested block, lift up
     } else {
       tr.lift(pos, pos)
-      let next = pos.depth - 2
-      // Split list item when we backspace back into it
-      if (next > 0 && offset > 0 &&
-          pm.doc.path(pos.path.slice(0, next)).type == nodeTypes.list_item)
-        tr.split(new Pos(pos.path.slice(0, next), pos.path[next] + 1))
     }
   }
 }

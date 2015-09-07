@@ -1,6 +1,6 @@
 import "./css"
 
-import {spanStylesAt, rangeHasStyle, style, sliceBetween, Pos} from "../model"
+import {spanStylesAt, rangeHasStyle, style, sliceBetween, Pos, findDiffStart} from "../model"
 import {Transform} from "../transform"
 
 import {parseOptions, initOptions, setOption} from "./options"
@@ -58,6 +58,8 @@ export class ProseMirror {
 
   apply(transform, options = nullOptions) {
     if (transform.doc == this.doc) return false
+    if (transform.docs[0] != this.doc && findDiffStart(transform.docs[0], this.doc))
+      throw new Error("Applying a transform that does not start with the current document")
 
     this.updateDoc(transform.doc, transform)
     this.signal("transform", transform, options)
@@ -184,17 +186,6 @@ export class ProseMirror {
     this.ranges.removeRange(range)
   }
 
-  extendCommand(name, priority, f) {
-    if (f == null) { f = priority; priority = "normal"; }
-    if (!/^(normal|low|high)$/.test(priority)) throw new Error("Invalid priority: " + priority)
-    this.input.extendCommand(name, priority, f)
-  }
-
-  unextendCommand(name, priority, f) {
-    if (f == null) { f = priority; priority = "normal"; }
-    this.input.unextendCommand(name, priority, f)
-  }
-
   setInlineStyle(st, to, range) {
     if (!range) range = this.selection
     if (!range.empty) {
@@ -203,7 +194,7 @@ export class ProseMirror {
     } else if (!this.doc.path(range.head.path).type.plainText && range == this.selection) {
       let styles = this.activeStyles()
       if (to == null) to = !style.contains(styles, st)
-      this.input.storedStyles = to ? style.add(styles, st) : style.remove(styles, st)
+      this.input.storedStyles = to ? style.add(styles, st) : style.removeType(styles, st.type)
       this.signal("activeStyleChange")
     }
   }
