@@ -3,8 +3,8 @@ import {canLift, canWrap, joinPoint} from "../transform"
 import {elt} from "../dom"
 import {MenuItem} from "./menu"
 export {MenuItem}
-import insertCSS from "insert-css"
-import "./icons"
+// import insertCSS from "insert-css"
+// import "./icons"
 
 const tags = Object.create(null)
 
@@ -321,68 +321,68 @@ export function forceFontLoad(pm) {
   window.setTimeout(() => pm.wrapper.removeChild(node), 20)
 }
 
-insertCSS(`
+// insertCSS(`
 
-.ProseMirror-menuicon {
-  display: inline-block;
-  padding: 1px 4px;
-  margin: 0 2px;
-  cursor: pointer;
-  text-rendering: auto;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  text-align: center;
-  vertical-align: middle;
-}
+// .ProseMirror-menuicon {
+//   display: inline-block;
+//   padding: 1px 4px;
+//   margin: 0 2px;
+//   cursor: pointer;
+//   text-rendering: auto;
+//   -webkit-font-smoothing: antialiased;
+//   -moz-osx-font-smoothing: grayscale;
+//   text-align: center;
+//   vertical-align: middle;
+// }
 
-.ProseMirror-menuicon-active {
-  background: #666;
-  border-radius: 4px;
-}
+// .ProseMirror-menuicon-active {
+//   background: #666;
+//   border-radius: 4px;
+// }
 
-.ProseMirror-menuseparator {
-  display: inline-block;
-}
-.ProseMirror-menuseparator:after {
-  content: "︙";
-  opacity: 0.5;
-  padding: 0 4px;
-  vertical-align: middle;
-}
+// .ProseMirror-menuseparator {
+//   display: inline-block;
+// }
+// .ProseMirror-menuseparator:after {
+//   content: "︙";
+//   opacity: 0.5;
+//   padding: 0 4px;
+//   vertical-align: middle;
+// }
 
-.ProseMirror-blocktype, .ProseMirror-blocktype-menu {
-  border: 1px solid #777;
-  border-radius: 3px;
-  font-size: 90%;
-}
+// .ProseMirror-blocktype, .ProseMirror-blocktype-menu {
+//   border: 1px solid #777;
+//   border-radius: 3px;
+//   font-size: 90%;
+// }
 
-.ProseMirror-blocktype {
-  padding: 1px 2px 1px 4px;
-  display: inline-block;
-  vertical-align: middle;
-  cursor: pointer;
-  margin: 0 4px;
-}
+// .ProseMirror-blocktype {
+//   padding: 1px 2px 1px 4px;
+//   display: inline-block;
+//   vertical-align: middle;
+//   cursor: pointer;
+//   margin: 0 4px;
+// }
 
-.ProseMirror-blocktype:after {
-  content: " ▿";
-  color: #777;
-  vertical-align: top;
-}
+// .ProseMirror-blocktype:after {
+//   content: " ▿";
+//   color: #777;
+//   vertical-align: top;
+// }
 
-.ProseMirror-blocktype-menu {
-  position: absolute;
-  background: #444;
-  color: white;
-  padding: 2px 2px;
-  z-index: 5;
-}
-.ProseMirror-blocktype-menu div {
-  cursor: pointer;
-  padding: 0 1em 0 2px;
-}
-.ProseMirror-blocktype-menu div:hover {
-  background: #777;
-}
+// .ProseMirror-blocktype-menu {
+//   position: absolute;
+//   background: #444;
+//   color: white;
+//   padding: 2px 2px;
+//   z-index: 5;
+// }
+// .ProseMirror-blocktype-menu div {
+//   cursor: pointer;
+//   padding: 0 1em 0 2px;
+// }
+// .ProseMirror-blocktype-menu div:hover {
+//   background: #777;
+// }
 
-`)
+// `)

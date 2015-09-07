@@ -7,7 +7,7 @@ import {Tooltip} from "./tooltip"
 import {getItems, forceFontLoad} from "./items"
 import {Menu, TooltipDisplay} from "./menu"
 
-import insertCSS from "insert-css"
+// import insertCSS from "insert-css"
 
 const classPrefix = "ProseMirror-inlinemenu"
 
@@ -88,16 +88,16 @@ function topCenterOfSelection() {
   return {top, left: (left + right) / 2}
 }
 
-insertCSS(`
+// insertCSS(`
 
-.ProseMirror-inlinemenu-linktext a {
-  color: white;
-  text-decoration: none;
-  padding: 0 5px;
-}
+// .ProseMirror-inlinemenu-linktext a {
+//   color: white;
+//   text-decoration: none;
+//   padding: 0 5px;
+// }
 
-.ProseMirror-inlinemenu-linktext a:hover {
-  text-decoration: underline;
-}
+// .ProseMirror-inlinemenu-linktext a:hover {
+//   text-decoration: underline;
+// }
 
-`)
+// `)

@@ -29,13 +29,21 @@ export class Input {
     this.commandExtensions = Object.create(null)
 
     this.storedStyles = null
-
+    this.eventHandlers = {};
     for (let event in handlers) {
       let handler = handlers[event]
-      pm.content.addEventListener(event, e => handler(pm, e))
+      this.eventHandlers[event] = e => handler(pm, e);
+      pm.content.addEventListener(event, this.eventHandlers[event])
     }
-
-    pm.on("selectionChange", () => this.storedStyles = null)
+    this._selectionChangeHandler = () => this.storedStyles = null;
+    pm.on("selectionChange", this._selectionChangeHandler)
+  }
+  removeHandlers(){
+    for (let event in handlers) {
+      let handler = handlers[event]
+      this.pm.content.removeEventListener(event, this.eventHandlers[event])
+    }
+    this.pm.off("selectionChange", this._selectionChangeHandler)
   }
 
   extendCommand(name, priority, f) {

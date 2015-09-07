@@ -1,5 +1,5 @@
 import {elt} from "../dom"
-import insertCSS from "insert-css"
+// import insertCSS from "insert-css"
 
 export class Menu {
   constructor(pm, display) {
@@ -87,26 +87,26 @@ export class MenuItem {
   render() { throw new Error("You have to implement this") }
 }
 
-insertCSS(`
+// insertCSS(`
 
-.ProseMirror-menu {
-  margin: 0 -4px;
-  line-height: 1;
-  white-space: pre;
-  width: -webkit-fit-content;
-  width: fit-content;
-}
+// .ProseMirror-menu {
+//   margin: 0 -4px;
+//   line-height: 1;
+//   white-space: pre;
+//   width: -webkit-fit-content;
+//   width: fit-content;
+// }
 
-.ProseMirror-tooltip-back-wrapper {
-  padding-left: 12px;
-}
-.ProseMirror-tooltip-back {
-  position: absolute;
-  top: 5px; left: 5px;
-  cursor: pointer;
-}
-.ProseMirror-tooltip-back:after {
-  content: "«";
-}
+// .ProseMirror-tooltip-back-wrapper {
+//   padding-left: 12px;
+// }
+// .ProseMirror-tooltip-back {
+//   position: absolute;
+//   top: 5px; left: 5px;
+//   cursor: pointer;
+// }
+// .ProseMirror-tooltip-back:after {
+//   content: "«";
+// }
 
-`)
+// `)

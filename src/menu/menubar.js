@@ -5,8 +5,8 @@ import {Debounced} from "../util/debounce"
 import {Menu} from "./menu"
 import {getItems, separatorItem} from "./items"
 
-import insertCSS from "insert-css"
-import "./icons"
+// import insertCSS from "insert-css"
+// import "./icons"
 
 defineOption("menuBar", false, function(pm, value) {
   if (pm.mod.menuBar) pm.mod.menuBar.detach()
@@ -138,77 +138,77 @@ function findWrappingScrollable(node) {
     if (cur.scrollHeight > cur.clientHeight) return cur
 }
 
-insertCSS(`
-.ProseMirror-menubar {
-  padding: 1px 4px;
-  position: relative;
-  margin-bottom: 3px;
-  border-top-left-radius: inherit;
-  border-top-right-radius: inherit;
-}
+// insertCSS(`
+// .ProseMirror-menubar {
+//   padding: 1px 4px;
+//   position: relative;
+//   margin-bottom: 3px;
+//   border-top-left-radius: inherit;
+//   border-top-right-radius: inherit;
+// }
 
-.ProseMirror-menubar-inner {
-  color: #666;
-  padding: 1px 4px;
-  top: 0; left: 0; right: 0;
-  position: absolute;
-  border-bottom: 1px solid silver;
-  background: white;
-  -moz-box-sizing: border-box;
-  box-sizing: border-box;
-  overflow: hidden;
-  border-top-left-radius: inherit;
-  border-top-right-radius: inherit;
-}
+// .ProseMirror-menubar-inner {
+//   color: #666;
+//   padding: 1px 4px;
+//   top: 0; left: 0; right: 0;
+//   position: absolute;
+//   border-bottom: 1px solid silver;
+//   background: white;
+//   -moz-box-sizing: border-box;
+//   box-sizing: border-box;
+//   overflow: hidden;
+//   border-top-left-radius: inherit;
+//   border-top-right-radius: inherit;
+// }
 
-.ProseMirror-menubar .ProseMirror-menuicon-active {
-  background: #eee;
-}
+// .ProseMirror-menubar .ProseMirror-menuicon-active {
+//   background: #eee;
+// }
 
-.ProseMirror-menubar input[type="text"],
-.ProseMirror-menubar textarea {
-  background: #eee;
-  color: black;
-  border: none;
-  outline: none;
-  margin: 2px;
-}
+// .ProseMirror-menubar input[type="text"],
+// .ProseMirror-menubar textarea {
+//   background: #eee;
+//   color: black;
+//   border: none;
+//   outline: none;
+//   margin: 2px;
+// }
 
-.ProseMirror-menubar input[type="text"] {
-  padding: 0 4px;
-}
+// .ProseMirror-menubar input[type="text"] {
+//   padding: 0 4px;
+// }
 
-.ProseMirror-menubar .ProseMirror-blocktype {
-  border: 1px solid #ccc;
-  min-width: 4em;
-}
-.ProseMirror-menubar .ProseMirror-blocktype:after {
-  color: #ccc;
-}
+// .ProseMirror-menubar .ProseMirror-blocktype {
+//   border: 1px solid #ccc;
+//   min-width: 4em;
+// }
+// .ProseMirror-menubar .ProseMirror-blocktype:after {
+//   color: #ccc;
+// }
 
-.ProseMirror-menubar-sliding {
-  -webkit-transition: left 0.2s ease-out;
-  -moz-transition: left 0.2s ease-out;
-  transition: left 0.2s ease-out;
-  position: relative;
-  left: 100%;
-  width: 100%;
-  padding-left: 16px;
-  background: white;
-}
+// .ProseMirror-menubar-sliding {
+//   -webkit-transition: left 0.2s ease-out;
+//   -moz-transition: left 0.2s ease-out;
+//   transition: left 0.2s ease-out;
+//   position: relative;
+//   left: 100%;
+//   width: 100%;
+//   padding-left: 16px;
+//   background: white;
+// }
 
-.ProseMirror-menubar-back {
-  position: absolute;
-  height: 100%;
-  margin-top: -1px;
-  padding-bottom: 2px;
-  width: 10px;
-  left: 0;
-  border-right: 1px solid silver;
-  cursor: pointer;
-}
-.ProseMirror-menubar-back:after {
-  content: "«";
-}
+// .ProseMirror-menubar-back {
+//   position: absolute;
+//   height: 100%;
+//   margin-top: -1px;
+//   padding-bottom: 2px;
+//   width: 10px;
+//   left: 0;
+//   border-right: 1px solid silver;
+//   cursor: pointer;
+// }
+// .ProseMirror-menubar-back:after {
+//   content: "«";
+// }
 
-`)
+// `)

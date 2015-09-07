@@ -7,8 +7,8 @@ import {Tooltip} from "./tooltip"
 import {Menu, TooltipDisplay} from "./menu"
 import {getItems, separatorItem, forceFontLoad} from "./items"
 
-import insertCSS from "insert-css"
-import "./icons"
+// import insertCSS from "insert-css"
+// import "./icons"
 
 const classPrefix = "ProseMirror-buttonmenu"
 
@@ -79,35 +79,35 @@ class ButtonMenu {
   }
 }
 
-insertCSS(`
+// insertCSS(`
 
-.ProseMirror-buttonmenu-button {
-  display: none;
-  position: absolute;
-  top: 7px;
-  right: 7px;
-  width: 15px;
-  height: 13px;
-  cursor: pointer;
+// .ProseMirror-buttonmenu-button {
+//   display: none;
+//   position: absolute;
+//   top: 7px;
+//   right: 7px;
+//   width: 15px;
+//   height: 13px;
+//   cursor: pointer;
 
-  -webkit-transition: top 0.3s ease-out;
-  -moz-transition: top 0.3s ease-out;
-  transition: top 0.3s ease-out;
-}
+//   -webkit-transition: top 0.3s ease-out;
+//   -moz-transition: top 0.3s ease-out;
+//   transition: top 0.3s ease-out;
+// }
 
-.ProseMirror-focused .ProseMirror-buttonmenu-button {
-  display: block;
-}
+// .ProseMirror-focused .ProseMirror-buttonmenu-button {
+//   display: block;
+// }
 
-.ProseMirror-buttonmenu-button div {
-  height: 3px;
-  margin-bottom: 2px;
-  border-radius: 4px;
-  background: #888;
-}
+// .ProseMirror-buttonmenu-button div {
+//   height: 3px;
+//   margin-bottom: 2px;
+//   border-radius: 4px;
+//   background: #888;
+// }
 
-.ProseMirror-buttonmenu-button:hover div {
-  background: #333;
-}
+// .ProseMirror-buttonmenu-button:hover div {
+//   background: #333;
+// }
 
-`)
+// `)

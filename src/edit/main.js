@@ -1,5 +1,3 @@
-import "./css"
-
 import {spanStylesAt, rangeHasStyle, style, sliceBetween, Pos} from "../model"
 import {Transform} from "../transform"
 
@@ -41,7 +39,9 @@ export class ProseMirror {
 
     initOptions(this)
   }
-
+  destroy(){
+    this.input.removeHandlers()
+  }
   get selection() {
     this.ensureOperation()
     return this.sel.range
