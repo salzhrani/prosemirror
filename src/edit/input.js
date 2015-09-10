@@ -3,7 +3,7 @@ import {Pos, Node, Span, spanStylesAt} from "../model"
 import {fromHTML} from "../convert/from_dom"
 import {toHTML} from "../convert/to_dom"
 import {toText} from "../convert/to_text"
-import {knownSource, convertFrom} from "../convert/convert"
+import {knownSource, convertFrom} from "../convert"
 
 import {isModifierKey, lookupKey, keyName} from "./keys"
 import {browser, addClass, rmClass} from "../dom"
@@ -82,11 +82,10 @@ export function dispatchKey(pm, name, e) {
   }
 
   let result
-  for (let i = 0; !result && i < pm.input.keymaps.length; i++)
+  for (let i = pm.input.keymaps.length - 1; !result && i >= 0; i--)
     result = lookupKey(name, pm.input.keymaps[i], handle, pm)
   if (!result)
-    result = lookupKey(name, pm.options.extraKeymap, handle, pm) ||
-      lookupKey(name, pm.options.keymap, handle, pm)
+    result = lookupKey(name, pm.options.keymap, handle, pm)
 
   if (result == "multi")
     pm.input.keySeq = name
