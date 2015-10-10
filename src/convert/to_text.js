@@ -1,21 +1,20 @@
-import {nodeTypes} from "../model"
 import {defineTarget} from "./index"
 
 export function toText(doc) {
   let out = ""
   function explore(node) {
-    if (node.type.block) {
+    if (node.isTextblock) {
       let text = ""
-      for (let i = 0; i < node.content.length; i++) {
-        let child = node.content[i]
-        if (child.type == nodeTypes.text)
+      for (let i = 0; i < node.length; i++) {
+        let child = node.child(i)
+        if (child.isText)
           text += child.text
-        else if (child.type == nodeTypes.hard_break)
+        else if (child.type == child.type.schema.nodeTypes.hard_break)
           text += "\n"
       }
       if (text) out += (out ? "\n\n" : "") + text
     } else {
-      node.content.forEach(explore)
+      for (let i = 0; i < node.length; i++) explore(node.child(i))
     }
   }
   explore(doc)
