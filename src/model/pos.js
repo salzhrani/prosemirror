@@ -40,7 +40,7 @@ export class Pos {
   }
 
   shorten(to = null, offset = 0) {
-    if (to == this.depth) return this
+    if (to >= this.depth) return this
     return Pos.shorten(this.path, to, offset)
   }
 
@@ -71,24 +71,24 @@ export class Pos {
 }
 
 function findLeft(node, path) {
-  if (node.type.block)
+  if (node.isTextblock)
     return new Pos(path, 0)
-  for (let i = 0; i < node.content.length; i++) {
+  for (let i = 0; i < node.length; i++) {
     path.push(i)
-    let found = findLeft(node.content[i], path)
+    let found = findLeft(node.child(i), path)
     if (found) return found
     path.pop()
   }
 }
 
 function findAfter(node, pos, path) {
-  if (node.type.block)
+  if (node.isTextblock)
     return pos
   let atEnd = path.length == pos.path.length
   let start = atEnd ? pos.offset : pos.path[path.length]
-  for (let i = start; i < node.content.length; i++) {
+  for (let i = start; i < node.length; i++) {
     path.push(i)
-    let child = node.content[i]
+    let child = node.child(i)
     let found = i == start && !atEnd ? findAfter(child, pos, path) : findLeft(child, path)
     if (found) return found
     path.pop()
@@ -96,23 +96,23 @@ function findAfter(node, pos, path) {
 }
 
 function findRight(node, path) {
-  if (node.type.block)
-    return new Pos(path, node.size)
-  for (let i = node.content.length - 1; i >= 0; i--) {
+  if (node.isTextblock)
+    return new Pos(path, node.maxOffset)
+  for (let i = node.length - 1; i >= 0; i--) {
     path.push(i)
-    let found = findRight(node.content[i], path)
+    let found = findRight(node.child(i), path)
     if (found) return found
     path.pop()
   }
 }
 
 function findBefore(node, pos, path) {
-  if (node.type.block) return pos
+  if (node.isTextblock) return pos
   let atEnd = pos.path.length == path.length
   let end = atEnd ? pos.offset - 1 : pos.path[path.length]
   for (let i = end; i >= 0; i--) {
     path.push(i)
-    let child = node.content[i]
+    let child = node.child(i)
     let found = i == end && !atEnd ? findBefore(child, pos, path) : findRight(child, path)
     if (found) return found
     path.pop()

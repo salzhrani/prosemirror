@@ -1,8 +1,8 @@
-import {Pos, Node, findConnection} from "../model"
+import {Pos} from "../model"
 
 import {TransformResult, Transform} from "./transform"
 import {defineStep, Step} from "./step"
-import {isFlatRange, copyTo, selectedSiblings, blocksBetween, isPlainText} from "./tree"
+import {isFlatRange, selectedSiblings, blocksBetween, isPlainText} from "./tree"
 import {PosMap, MovedRange, ReplacedRange} from "./map"
 
 defineStep("ancestor", {
@@ -10,7 +10,7 @@ defineStep("ancestor", {
     let from = step.from, to = step.to
     if (!isFlatRange(from, to)) return null
     let toParent = from.path, start = from.offset, end = to.offset
-    let depth = step.param.depth || 0, wrappers = step.param.wrappers || Node.empty
+    let depth = step.param.depth || 0, wrappers = step.param.wrappers || []
     if (!depth && wrappers.length == 0) return null
     for (let i = 0; i < depth; i++) {
       if (start > 0 || end < doc.path(toParent).maxOffset || toParent.length == 0) return null
@@ -18,23 +18,24 @@ defineStep("ancestor", {
       end = start + 1
       toParent = toParent.slice(0, toParent.length - 1)
     }
-    let copy = copyTo(doc, toParent)
-    let parent = copy.path(toParent), inner = copy.path(from.path)
-    let parentSize = parent.content.length
+
+    let parent = doc.path(toParent), inner = doc.path(from.path), newParent
+    let parentSize = parent.length
     if (wrappers.length) {
       let lastWrapper = wrappers[wrappers.length - 1]
-      if (parent.type.contains != wrappers[0].type.type ||
+      if (!parent.type.canContain(wrappers[0].type) ||
           lastWrapper.type.contains != inner.type.contains ||
           lastWrapper.type.plainText && !isPlainText(inner))
         return null
       let node = null
       for (let i = wrappers.length - 1; i >= 0; i--)
-        node = wrappers[i].copy(node ? [node] : inner.content.slice(from.offset, to.offset))
-      parent.content.splice(start, end - start, node)
+        node = wrappers[i].copy(node ? [node] : inner.slice(from.offset, to.offset))
+      newParent = parent.splice(start, end, [node])
     } else {
       if (parent.type.contains != inner.type.contains) return null
-      parent.content = parent.content.slice(0, start).concat(inner.content).concat(parent.content.slice(end))
+      newParent = parent.splice(start, end, inner.children)
     }
+    let copy = doc.replaceDeep(toParent, newParent)
 
     let toInner = toParent.slice()
     for (let i = 0; i < wrappers.length; i++) toInner.push(i ? 0 : start)
@@ -70,16 +71,16 @@ defineStep("ancestor", {
     return {depth: param.depth,
             wrappers: param.wrappers && param.wrappers.map(n => n.toJSON())}
   },
-  paramFromJSON(json) {
+  paramFromJSON(schema, json) {
     return {depth: json.depth,
-            wrappers: json.wrappers && json.wrappers.map(Node.fromJSON)}
+            wrappers: json.wrappers && json.wrappers.map(schema.nodeFromJSON)}
   }
 })
 
 function canUnwrap(container, from, to) {
-  let type = container.content[from].type.contains
+  let type = container.child(from).type.contains
   for (let i = from + 1; i < to; i++)
-    if (container.content[i].type.contains != type)
+    if (container.child(i).type.contains != type)
       return false
   return type
 }
@@ -91,7 +92,7 @@ function canBeLifted(doc, range) {
     parentDepth = -1
     for (let node = doc, i = 0; i < range.path.length; i++) {
       if (node.type.contains == innerType) parentDepth = i
-      node = node.content[range.path[i]]
+      node = node.child(range.path[i])
     }
     if (parentDepth > -1) return {path: range.path.slice(0, parentDepth),
                                   unwrap: unwrap}
@@ -114,7 +115,7 @@ Transform.prototype.lift = function(from, to = from) {
   let rangeNode = found.unwrap && this.doc.path(range.path)
 
   for (let d = 0, pos = new Pos(range.path, range.to);; d++) {
-    if (pos.offset < this.doc.path(pos.path).content.length) {
+    if (pos.offset < this.doc.path(pos.path).length) {
       this.split(pos, depth)
       break
     }
@@ -137,7 +138,7 @@ Transform.prototype.lift = function(from, to = from) {
       this.join(new Pos(range.path, i))
     let size = 0
     for (let i = range.from; i < range.to; i++)
-      size += rangeNode.content[i].content.length
+      size += rangeNode.child(i).length
     range = {path: range.path.concat(range.from), from: 0, to: size}
     ++depth
   }
@@ -150,8 +151,8 @@ export function canWrap(doc, from, to, node) {
   let range = selectedSiblings(doc, from, to || from)
   if (range.from == range.to) return null
   let parent = doc.path(range.path)
-  let around = findConnection(parent.type, node.type)
-  let inside = findConnection(node.type, parent.content[range.from].type)
+  let around = parent.type.findConnection(node.type)
+  let inside = node.type.findConnection(parent.child(range.from).type)
   if (around && inside) return {range, around, inside}
 }
 
@@ -159,7 +160,9 @@ Transform.prototype.wrap = function(from, to, node) {
   let can = canWrap(this.doc, from, to, node)
   if (!can) return this
   let {range, around, inside} = can
-  let wrappers = around.map(t => new Node(t)).concat(node).concat(inside.map(t => new Node(t)))
+  let wrappers = around.map(t => node.type.schema.node(t))
+                   .concat(node)
+                   .concat(inside.map(t => node.type.schema.node(t)))
   this.step("ancestor", new Pos(range.path, range.from), new Pos(range.path, range.to),
             null, {wrappers: wrappers})
   if (inside.length) {
@@ -176,8 +179,8 @@ Transform.prototype.setBlockType = function(from, to, wrapNode) {
   blocksBetween(this.doc, from, to || from, (node, path) => {
     path = path.slice()
     if (wrapNode.type.plainText && !isPlainText(node))
-      this.clearMarkup(new Pos(path, 0), new Pos(path, node.size))
-    this.step("ancestor", new Pos(path, 0), new Pos(path, node.size),
+      this.clearMarkup(new Pos(path, 0), new Pos(path, node.maxOffset))
+    this.step("ancestor", new Pos(path, 0), new Pos(path, node.maxOffset),
               null, {depth: 1, wrappers: [wrapNode]})
   })
   return this

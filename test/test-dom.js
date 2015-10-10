@@ -5,6 +5,7 @@ import {defTest} from "./tests"
 
 import xmlDOM from "xmldom"
 
+import {defaultSchema as schema} from "../src/model"
 import {toDOM} from "../src/convert/to_dom"
 import {fromDOM} from "../src/convert/from_dom"
 
@@ -30,7 +31,7 @@ function t(name, doc, dom) {
     if (derivedText != declaredText)
       throw new Failure("DOM text mismatch: " + derivedText + " vs " + declaredText)
 
-    cmpNode(doc, fromDOM(derivedDOM.documentElement))
+    cmpNode(doc, fromDOM(schema, derivedDOM.documentElement))
   })
 }
 
@@ -52,11 +53,11 @@ t("links",
 
 t("unordered_list",
   doc(ul(li(p("one")), li(p("two")), li(p("three", strong("!")))), p("after")),
-  "<ul class=\"bullet_star\" class=\"tight\"><li><p>one</p></li><li><p>two</p></li><li><p>three<strong>!</strong></p></li></ul><p>after</p>")
+  "<ul><li><p>one</p></li><li><p>two</p></li><li><p>three<strong>!</strong></p></li></ul><p>after</p>")
 
 t("ordered_list",
   doc(ol(li(p("one")), li(p("two")), li(p("three", strong("!")))), p("after")),
-  "<ol class=\"tight\"><li><p>one</p></li><li><p>two</p></li><li><p>three<strong>!</strong></p></li></ol><p>after</p>")
+  "<ol><li><p>one</p></li><li><p>two</p></li><li><p>three<strong>!</strong></p></li></ol><p>after</p>")
 
 t("blockquote",
   doc(blockquote(p("hello"), p("bye"))),
@@ -79,7 +80,7 @@ t("code_block",
   "<blockquote><pre><code>some code</code></pre></blockquote><p>and</p>")
 
 function recover(name, html, doc) {
-  defTest("dom_recover_" + name, () => cmpNode(fromDOM(domFor(html)), doc))
+  defTest("dom_recover_" + name, () => cmpNode(fromDOM(schema, domFor(html)), doc))
 }
 
 recover("list",

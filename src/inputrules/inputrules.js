@@ -1,4 +1,4 @@
-import {Pos, Span, style, spanStylesAt} from "../model"
+import {Pos, style, spanStylesAt} from "../model"
 
 export function addInputRules(pm, rules) {
   if (!pm.mod.interpretInput)
@@ -6,7 +6,7 @@ export function addInputRules(pm, rules) {
   pm.mod.interpretInput.addRules(rules)
 }
 
-export function removeInputRule(pm, rules) {
+export function removeInputRules(pm, rules) {
   let ii = pm.mod.interpretInput
   if (!ii) return
   ii.removeRules(rules)
@@ -71,7 +71,7 @@ class InputRules {
           let offset = pos.offset - (match[1] || match[0]).length
           let start = new Pos(pos.path, offset)
           let styles = spanStylesAt(this.pm.doc, pos)
-          this.pm.apply(this.pm.tr.delete(start, pos).insert(start, Span.text(rule.handler, styles)))
+          this.pm.apply(this.pm.tr.delete(start, pos).insert(start, this.pm.schema.text(rule.handler, styles)))
         } else {
           rule.handler(this.pm, match, pos)
         }
@@ -96,7 +96,7 @@ function getContext(doc, pos) {
   let isPlain = parent.type.plainText
   let textBefore = ""
   for (let offset = 0, i = 0; offset < pos.offset;) {
-    let child = parent.content[i++], size = child.size
+    let child = parent.child(i++), size = child.offset
     textBefore += offset + size > pos.offset ? child.text.slice(0, pos.offset - offset) : child.text
     if (offset + size >= pos.offset) {
       if (style.contains(child.styles, style.code))
