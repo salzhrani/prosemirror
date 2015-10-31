@@ -1,4 +1,4 @@
-import {defaultSchema as schema, Pos, style} from "../../src/model"
+import {defaultSchema as schema, Pos} from "../../src/model"
 import {Transform, joinPoint, canLift, canWrap} from "../../src/transform"
 import {cmp, cmpStr} from "../cmp"
 import {randomPos} from "./pos"
@@ -108,7 +108,7 @@ tests.insert = (doc, positions) => {
   let img = schema.node("image", {src: "http://image2"})
   for (let i = 0; i < positions.length; i++) {
     let pos = positions[i], node = doc.path(pos.path)
-    if (node.type.canContain(para.type))
+    if (node.type.canContain(para))
       runTest("insert", doc, {pos: pos, node: para})
     else if (node.isTextblock)
       runTest("insert", doc, {pos: pos, node: img})
@@ -174,7 +174,10 @@ tests.style = (doc, _, blockPositions) => {
       let rnd = Math.random(), rnd2 = Math.random()
       let type = rnd < .33 ? "addStyle" : rnd < .66  ? "removeStyle" : "clearMarkup"
       let st = type != "clearMarkup" &&
-          rnd2 < .3 ? style.em : rnd2 < .6 ? style.strong : rnd2 < .8 ? style.link("http://p") : style.code
+          rnd2 < .3 ? schema.style("em")
+        : rnd2 < .6 ? schema.style("strong")
+        : rnd2 < .8 ? schema.style("link", {href: "http://p"})
+        : schema.style("code")
       runTest("style", doc, {type: type, from: blockPositions[i], to: blockPositions[j], style: st})
     }
   }
@@ -192,7 +195,7 @@ tests.lift = (doc, _, blockPositions) => {
     let from = blockPositions[i]
     let to = blockPositions[Math.floor(Math.random() * (blockPositions.length - i)) + i]
     let lift = canLift(doc, from, to), p
-    if (lift && (!last || (p = new Pos(lift.range.path, lift.range.from)).cmp(last))) {
+    if (lift && (!last || (p = lift.range.from).cmp(last))) {
       runTest("lift", doc, {from, to})
       last = p
     }
@@ -205,11 +208,11 @@ run.lift = (tr, info) => {
 }
 
 let blockTypes = [], wrapTypes = []
-for (let name in schema.nodeTypes) {
-  let type = schema.nodeTypes[name]
-  if (type.textblock)
+for (let name in schema.nodes) {
+  let type = schema.nodes[name]
+  if (type.isTextblock)
     blockTypes.push(type)
-  else if (type.textblock)
+  else if (type.contains)
     wrapTypes.push(type)
 }
 
@@ -221,7 +224,7 @@ tests.wrap = (doc, positions) => {
     let type = wrapTypes[Math.floor(Math.random() * wrapTypes.length)]
     let node = schema.node(type, attrs[type.name])
     let wrap = canWrap(doc, from, to, node)
-    if (wrap && (!last || (p = new Pos(wrap.range.path, wrap.range.from)).cmp(last))) {
+    if (wrap && (!last || (p = wrap.range.from).cmp(last))) {
       runTest("wrap", doc, {from, to, node})
       last = p
     }
@@ -244,6 +247,6 @@ tests.setBlockType = (doc, _, blockPositions) => {
 
 run.setBlockType = (tr, info) => {
   tr.setBlockType(info.from, info.to, info.node)
-  if (!info.node.type.plainText)
+  if (info.node.type.containsStyles)
     cmp(nodeSize(tr.doc), docSize(tr.docs[0]), "setBlockType doesn't change size")
 }

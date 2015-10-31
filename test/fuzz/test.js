@@ -1,4 +1,4 @@
-import {Node, style} from "../../src/model"
+import {Node, sameStyles} from "../../src/model"
 import {Transform, Remapping} from "../../src/transform"
 import {cmpStr, cmpNode} from "../cmp"
 import {randomPos} from "./pos"
@@ -50,17 +50,17 @@ export function sizeBetween(doc, from, to) {
 export function checkInvariants(node) {
   for (let i = 0; i < node.length; i++) {
     let child = node.child(i)
-    if (node.type.canContain(child.type))
+    if (node.type.canContain(child))
       throw new Error(child.type.name + " node in " + node.type.name)
     if (node.isTextblock && child.isText) {
       if (i) {
         let prev = node.child(i - 1)
-        if (prev.isText && style.sameSet(prev.styles, child.styles))
+        if (prev.isText && sameStyles(prev.styles, child.styles))
           throw new Error("identically styled ajacent text nodes")
       }
       if (i < node.length - 1) {
         let next = node.child(i + 1)
-        if (next.isText && style.sameSet(next.styles, child.styles))
+        if (next.isText && sameStyles(next.styles, child.styles))
           throw new Error("identically styled ajacent text nodes")
       }
     }

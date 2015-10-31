@@ -1,5 +1,5 @@
 import {Pos, findDiffStart, findDiffEnd} from "../model"
-import {fromDOM} from "../convert/from_dom"
+import {fromDOM} from "../parse/dom"
 import {samePathDepth} from "../transform/tree"
 
 import {findByPath} from "./selection"
@@ -63,7 +63,7 @@ function offsetBy(first, second, pos) {
   let same = samePathDepth(first, second)
   let firstEnd = same == first.depth, secondEnd = same == second.depth
   let off = (secondEnd ? second.offset : second.path[same]) - (firstEnd ? first.offset : first.path[same])
-  let shorter = firstEnd ? pos.shift(off) : pos.shorten(same, off)
+  let shorter = firstEnd ? pos.move(off) : pos.shorten(same, off)
   if (secondEnd) return shorter
   else return shorter.extend(new Pos(second.path.slice(same), second.offset))
 }
