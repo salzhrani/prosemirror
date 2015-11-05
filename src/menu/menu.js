@@ -125,6 +125,19 @@ function renderSelect(item, menu) {
   return dom
 }
 
+function renderRadio(item, menu) {
+  let param = item.params[0]
+  let value = !param.default ? null : param.default.call ? param.default(menu.pm) : param.default
+  debugger;
+  let dom = elt("div", {class: "ProseMirror-select ProseMirror-radio-command-" + item.name, title: item.label},
+                !value ? (param.defaultLabel || "Select...") : value.display ? value.display(value) : value.label)
+  dom.addEventListener("mousedown", e => {
+    e.preventDefault(); e.stopPropagation()
+    showSelectMenu(menu.pm, item, dom)
+  })
+  return dom
+}
+
 export function showSelectMenu(pm, item, dom) {
   let param = item.params[0]
   let options = param.options.call ? param.options(pm) : param.options
@@ -157,6 +170,7 @@ export function showSelectMenu(pm, item, dom) {
 function renderItem(item, menu) {
   if (item.display == "icon") return renderIcon(item, menu)
   else if (item.display == "select") return renderSelect(item, menu)
+  else if (item.display == "radio") return renderRadio(item, menu)
   else if (!item.display) throw new Error("Command " + item.name + " can not be shown in a menu")
   else return item.display(menu)
 }
@@ -171,6 +185,9 @@ function buildParamForm(pm, command) {
     else if (param.type == "select")
       field = elt("select", {name}, (param.options.call ? param.options(pm) : param.options)
                   .map(o => elt("option", {value: o.value, selected: o == param.default}, o.label)))
+    else if (param.type == "radio")
+      field = elt("div", {name, class: 'ProseMirror-radio-container'}, (param.options.call ? param.options(pm) : param.options)
+                  .map(o => elt("label", {}, [o.label, elt("input", {type: "radio", value: o.value, name: name + '-radio', checked: o == param.default, class="ProseMirror-radio"})])))
     else // FIXME more types
       throw new Error("Unsupported parameter type: " + param.type)
     return elt("div", null, field)
