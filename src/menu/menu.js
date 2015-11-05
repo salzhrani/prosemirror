@@ -100,11 +100,13 @@ function renderIcon(command, menu) {
                 elt("span", {class: "ProseMirror-menuicon ProseMirror-icon-" + command.name}))
   dom.addEventListener("mousedown", e => {
     e.preventDefault(); e.stopPropagation()
-    if (command.params.length) {
-      menu.enter(readParams(command))
-    } else {
+    if (!command.params.length) {
       command.exec(menu.pm)
       menu.reset()
+    } else if (command.params.length == 1 && command.params[0].type == "select") {
+      showSelectMenu(menu.pm, command, dom)
+    } else {
+      menu.enter(readParams(command))
     }
   })
   return dom
@@ -123,7 +125,7 @@ function renderSelect(item, menu) {
   return dom
 }
 
-function showSelectMenu(pm, item, dom) {
+export function showSelectMenu(pm, item, dom) {
   let param = item.params[0]
   let options = param.options.call ? param.options(pm) : param.options
   let menu = elt("div", {class: "ProseMirror-select-menu"}, options.map(o => {
@@ -159,11 +161,16 @@ function renderItem(item, menu) {
   else return item.display(menu)
 }
 
-function buildParamForm(command) {
+function buildParamForm(pm, command) {
   let fields = command.params.map((param, i) => {
     let field, name = "field_" + i
     if (param.type == "text")
-      field = elt("input", {name, type: "text", placeholder: param.name, size: 40, autocomplete: "off"})
+      field = elt("input", {name, type: "text",
+                            placeholder: param.name,
+                            autocomplete: "off"})
+    else if (param.type == "select")
+      field = elt("select", {name}, (param.options.call ? param.options(pm) : param.options)
+                  .map(o => elt("option", {value: o.value, selected: o == param.default}, o.label)))
     else // FIXME more types
       throw new Error("Unsupported parameter type: " + param.type)
     return elt("div", null, field)
@@ -183,7 +190,7 @@ function gatherParams(command, form, pm) {
 }
 
 function paramForm(pm, command, callback) {
-  let form = buildParamForm(command), done = false
+  let form = buildParamForm(pm, command), done = false
 
   let finish = result => {
     if (!done) {
@@ -279,6 +286,8 @@ insertCSS(`
   margin: 0 -4px;
   line-height: 1;
   white-space: pre;
+}
+.ProseMirror-tooltip .ProseMirror-menu {
   width: -webkit-fit-content;
   width: fit-content;
 }

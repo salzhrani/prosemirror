@@ -10,7 +10,7 @@ import {isModifierKey, lookupKey, keyName} from "./keys"
 import {dangerousKeys} from "./dangerouskeys"
 import {browser, addClass, rmClass} from "../dom"
 import {applyDOMChange, textContext, textInContext} from "./domchange"
-import {Range, coordsAtPos} from "./selection"
+import {Range, coordsAtPos, rangeFromDOMLoose} from "./selection"
 
 let stopSeq = null
 
@@ -129,10 +129,12 @@ handlers.keydown = (pm, e) => {
   if (pm.input.composing) return
   let name = keyName(e)
   if (name) dispatchKey(pm, name, e)
+  pm.sel.pollForUpdate()
 }
 
 handlers.keyup = (pm, e) => {
   if (e.keyCode == 16) pm.input.shiftKey = false
+  pm.sel.pollForUpdate()
 }
 
 function inputText(pm, range, text) {
@@ -151,6 +153,14 @@ handlers.keypress = (pm, e) => {
   if (dispatchKey(pm, "'" + ch + "'", e)) return
   inputText(pm, pm.selection, ch)
   e.preventDefault()
+}
+
+handlers.mousedown = handlers.touchdown = pm => {
+  pm.sel.pollForUpdate()
+}
+
+handlers.mousemove = (pm, e) => {
+  if (e.which || e.button) pm.sel.pollForUpdate()
 }
 
 /**
@@ -203,9 +213,11 @@ handlers.compositionend = (pm, e) => {
 function finishComposing(pm) {
   let info = pm.input.composing
   let text = textInContext(info.context, info.endData)
-  if (text != info.data) pm.ensureOperation()
+  let range = rangeFromDOMLoose(pm)
+  pm.ensureOperation()
   pm.input.composing = null
   if (text != info.data) inputText(pm, info.range, text)
+  if (range && range.cmp(pm.sel.range)) pm.setSelection(range)
 }
 
 handlers.input = (pm) => {
@@ -216,10 +228,9 @@ handlers.input = (pm) => {
     return
   }
 
-  pm.input.suppressPolling = true
   applyDOMChange(pm)
-  pm.input.suppressPolling = false
-  pm.sel.poll(true)
+  // FIXME use our own idea of the selection?
+  pm.sel.pollForUpdate()
   pm.scrollIntoView()
 }
 

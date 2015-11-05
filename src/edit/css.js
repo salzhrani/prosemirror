@@ -38,6 +38,14 @@ insertCSS(`
   white-space: pre-wrap;
 }
 
+.ProseMirror-selectednode {
+  outline: 2px solid #8cf;
+}
+
+img.ProseMirror-selectednode::selection {
+  background: transparent;
+}
+
 .ProseMirror-content p:first-child,
 .ProseMirror-content h1:first-child,
 .ProseMirror-content h2:first-child,
@@ -46,6 +54,35 @@ insertCSS(`
 .ProseMirror-content h5:first-child,
 .ProseMirror-content h6:first-child {
   margin-top: .3em;
+}
+
+.ProseMirror-content ul, .ProseMirror-content ol {
+  padding-left: 0;
+}
+
+.ProseMirror-content li {
+  list-style-type: none;
+  padding-left: 32px;
+  position: relative;
+}
+
+.ProseMirror-content li:before {
+  position: absolute;
+  right: calc(100% - 32px);
+  padding-right: 8px;
+}
+
+.ProseMirror-content ul > li:before { content: "●" }
+.ProseMirror-content ul ul > li:before { content: "○" }
+.ProseMirror-content ul ul ul > li:before { content: "◾" }
+
+.ProseMirror-content ol {
+  counter-reset: prosemirror-list;
+}
+
+.ProseMirror-content ol > li:before {
+  counter-increment: prosemirror-list;
+  content: counter(prosemirror-list) ".";
 }
 
 `)

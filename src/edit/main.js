@@ -6,7 +6,7 @@ import {Transform} from "../transform"
 import sortedInsert from "../util/sortedinsert"
 
 import {parseOptions, initOptions, setOption} from "./options"
-import {Selection, Range, posAtCoords, coordsAtPos, scrollIntoView, hasFocus} from "./selection"
+import {Selection, Range, posAtCoords, posFromDOM, coordsAtPos, scrollIntoView, hasFocus} from "./selection"
 import {requestAnimationFrame, elt} from "../dom"
 import {draw, redraw} from "./draw"
 import {Input} from "./input"
@@ -62,8 +62,19 @@ export class ProseMirror {
    * @return {Range} The instance of the editor's selection range.
    */
   get selection() {
+    // FIXME only start an op when selection actually changed?
     this.ensureOperation()
     return this.sel.range
+  }
+
+  get selectedNode() {
+    this.ensureOperation()
+    return this.sel.selectedNode()
+  }
+
+  get selectedNodePath() {
+    this.ensureOperation()
+    return this.sel.node
   }
 
   get selectedDoc() {
@@ -128,9 +139,7 @@ export class ProseMirror {
     this.input.maybeAbortComposition()
     this.ranges.transform(mapping)
     this.doc = doc
-    let range = this.sel.range
-    this.sel.setAndSignal(new Range(mapping.map(range.anchor).pos,
-                                    mapping.map(range.head).pos))
+    this.sel.map(mapping)
     this.signal("change")
   }
 
@@ -152,9 +161,15 @@ export class ProseMirror {
       this.sel.setAndSignal(range)
   }
 
+  setNodeSelection(pos) {
+    this.checkPos(pos, false)
+    this.input.maybeAbortComposition()
+    this.sel.setNodeAndSignal(pos)
+  }
+
   ensureOperation() {
     if (!this.operation) {
-      if (!this.input.suppressPolling) this.sel.poll()
+      this.sel.beforeStartOp()
       this.operation = new Operation(this)
     }
     if (!this.flushScheduled) {
@@ -172,15 +187,19 @@ export class ProseMirror {
     if (!op || !document.body.contains(this.wrapper)) return
     this.operation = null
 
-    let docChanged = op.doc != this.doc || this.ranges.dirty.size
-    if (docChanged && !this.input.composing) {
+    let docChanged = op.doc != this.doc || this.ranges.dirty.size, redrawn = false
+    if (!this.input.composing && (docChanged || op.composingAtStart)) {
       if (op.fullRedraw) draw(this, this.doc) // FIXME only redraw target block composition
       else redraw(this, this.ranges.dirty, this.doc, op.doc)
       this.ranges.resetDirty()
+      redrawn = true
     }
-    if ((docChanged || op.sel.anchor.cmp(this.sel.range.anchor) || op.sel.head.cmp(this.sel.range.head)) &&
-        !this.input.composing)
-      this.sel.toDOM(docChanged, op.focus)
+    if ((redrawn ||
+         op.sel.anchor.cmp(this.sel.range.anchor) || op.sel.head.cmp(this.sel.range.head) ||
+         (op.selNode ? !this.sel.node || this.sel.node.cmp(op.selNode) : this.sel.node)) &&
+        !this.input.composing) {
+      this.sel.toDOM(op.focus)
+    }
     if (op.scrollIntoView !== false)
       scrollIntoView(this, op.scrollIntoView)
     if (docChanged) this.signal("draw")
@@ -237,7 +256,7 @@ export class ProseMirror {
 
   focus() {
     if (this.operation) this.operation.focus = true
-    else this.sel.toDOM(false, true)
+    else this.sel.toDOM(true)
   }
 
   hasFocus() {
@@ -246,6 +265,14 @@ export class ProseMirror {
 
   posAtCoords(coords) {
     return posAtCoords(this, coords)
+  }
+
+  posFromDOM(element, offset, textblock) {
+    // FIXME do some input checking
+    let pos = posFromDOM(this, element, offset)
+    if (textblock !== false && !this.doc.path(pos.path).isTextblock)
+      pos = Pos.near(this.doc, pos)
+    return pos
   }
 
   coordsAtPos(pos) {
@@ -259,9 +286,9 @@ export class ProseMirror {
     this.operation.scrollIntoView = pos
   }
 
-  execCommand(name) {
+  execCommand(name, params) {
     let cmd = this.commands[name]
-    return !!(cmd && cmd.exec(this) !== false)
+    return !!(cmd && cmd.exec(this, params) !== false)
   }
 }
 
@@ -273,8 +300,10 @@ class Operation {
   constructor(pm) {
     this.doc = pm.doc
     this.sel = pm.sel.range
+    this.selNode = pm.sel.node
     this.scrollIntoView = false
     this.focus = false
-    this.fullRedraw = !!pm.input.composing
+    this.fullRedraw = false
+    this.composingAtStart = !!pm.input.composing
   }
 }
