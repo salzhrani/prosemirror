@@ -6,7 +6,8 @@ import {Transform} from "../transform"
 import sortedInsert from "../util/sortedinsert"
 
 import {parseOptions, initOptions, setOption} from "./options"
-import {Selection, Range, posAtCoords, posFromDOM, coordsAtPos, scrollIntoView, hasFocus} from "./selection"
+import {Selection, SelectionRange, posAtCoords, posFromDOM, coordsAtPos,
+        scrollIntoView, hasFocus} from "./selection"
 import {requestAnimationFrame, elt} from "../dom"
 import {draw, redraw} from "./draw"
 import {Input} from "./input"
@@ -62,19 +63,8 @@ export class ProseMirror {
    * @return {Range} The instance of the editor's selection range.
    */
   get selection() {
-    // FIXME only start an op when selection actually changed?
     this.ensureOperation()
     return this.sel.range
-  }
-
-  get selectedNode() {
-    this.ensureOperation()
-    return this.sel.selectedNode()
-  }
-
-  get selectedNodePath() {
-    this.ensureOperation()
-    return this.sel.node
   }
 
   get selectedDoc() {
@@ -125,7 +115,7 @@ export class ProseMirror {
   setDoc(doc, sel) {
     if (!sel) {
       let start = Pos.start(doc)
-      sel = new Range(start, start)
+      sel = new SelectionRange(this.doc, start, start)
     }
     this.signal("beforeSetDoc", doc, sel)
     this.ensureOperation()
@@ -139,7 +129,7 @@ export class ProseMirror {
     this.input.maybeAbortComposition()
     this.ranges.transform(mapping)
     this.doc = doc
-    this.sel.map(mapping)
+    this.sel.setAndSignal(this.sel.map(mapping))
     this.signal("change")
   }
 
@@ -150,15 +140,13 @@ export class ProseMirror {
 
   setSelection(rangeOrAnchor, head) {
     let range = rangeOrAnchor
-    if (!(range instanceof Range))
-      range = new Range(rangeOrAnchor, head || rangeOrAnchor)
+    if (!(range instanceof SelectionRange))
+      range = new SelectionRange(this.doc, rangeOrAnchor, head || rangeOrAnchor)
     this.checkPos(range.head, true)
     this.checkPos(range.anchor, true)
     this.ensureOperation()
     this.input.maybeAbortComposition()
-    if (range.head.cmp(this.sel.range.head) ||
-        range.anchor.cmp(this.sel.range.anchor))
-      this.sel.setAndSignal(range)
+    if (range.cmp(this.sel.range)) this.sel.setAndSignal(range)
   }
 
   setNodeSelection(pos) {
@@ -194,12 +182,13 @@ export class ProseMirror {
       this.ranges.resetDirty()
       redrawn = true
     }
+
     if ((redrawn ||
          op.sel.anchor.cmp(this.sel.range.anchor) || op.sel.head.cmp(this.sel.range.head) ||
-         (op.selNode ? !this.sel.node || this.sel.node.cmp(op.selNode) : this.sel.node)) &&
-        !this.input.composing) {
+         (op.sel.nodePos ? !this.sel.range.nodePos || this.sel.range.nodePos.cmp(op.sel.nodePos) : this.sel.range.nodePos)) &&
+        !this.input.composing)
       this.sel.toDOM(op.focus)
-    }
+
     if (op.scrollIntoView !== false)
       scrollIntoView(this, op.scrollIntoView)
     if (docChanged) this.signal("draw")
@@ -300,7 +289,6 @@ class Operation {
   constructor(pm) {
     this.doc = pm.doc
     this.sel = pm.sel.range
-    this.selNode = pm.sel.node
     this.scrollIntoView = false
     this.focus = false
     this.fullRedraw = false

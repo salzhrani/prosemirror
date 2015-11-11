@@ -3,15 +3,13 @@ import {tempEditor} from "./def"
 import {cmpNode} from "../cmp"
 import {doc, blockquote, pre, h1, h2, p, li, ol, ul, em, strong, code, a, a2, br, hr} from "../build"
 
-import {Range} from "../../src/edit/selection"
-
 const used = Object.create(null)
 
 function test(cmd, before, after) {
   let known = used[cmd] || 0
   defTest("command_" + cmd + (known ? "_" + (known + 1) : ""), () => {
     let pm = tempEditor({doc: before})
-    pm.setSelection(new Range(before.tag.a, before.tag.b || before.tag.a))
+    pm.setSelection(before.tag.a, before.tag.b || before.tag.a)
     pm.execCommand(cmd)
     cmpNode(pm.doc, after)
   })
@@ -226,16 +224,16 @@ test("deleteWordAfter",
      doc(p("foo<a>   bar")),
      doc(p("foobar")))
 
-test("join",
+test("joinUp",
      doc(blockquote(p("foo")), blockquote(p("<a>bar"))),
      doc(blockquote(p("foo"), p("<a>bar"))))
-test("join",
+test("joinUp",
      doc(blockquote(p("<a>foo")), blockquote(p("bar"))),
      doc(blockquote(p("foo")), blockquote(p("bar"))))
-test("join",
+test("joinUp",
      doc(ul(li(p("foo"))), ul(li(p("<a>bar")))),
      doc(ul(li(p("foo")), li(p("bar")))))
-test("join",
+test("joinUp",
      doc(ul(li(p("foo")), li(p("<a>bar")))),
      doc(ul(li(p("foo"), p("bar")))))
 
