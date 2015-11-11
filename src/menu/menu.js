@@ -1,5 +1,6 @@
 import {Tooltip} from "./tooltip"
-import {elt} from "../dom"
+import {elt/*, insertCSS*/} from "../dom"
+
 import {defineParamHandler} from "../edit"
 import sortedInsert from "../util/sortedinsert"
 
