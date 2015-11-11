@@ -1,17 +1,23 @@
 import {Pos, spanStylesAt} from "../model"
 
-import {fromHTML} from "../convert/from_dom"
-import {toHTML} from "../convert/to_dom"
-import {toText} from "../convert/to_text"
-import {knownSource, convertFrom} from "../convert"
+import {fromHTML} from "../parse/dom"
+import {elt} from "../dom"
+import {toHTML} from "../serialize/dom"
+import {toText} from "../serialize/text"
+import {knownSource, convertFrom} from "../parse"
 
 import {isModifierKey, lookupKey, keyName} from "./keys"
+import {dangerousKeys} from "./dangerouskeys"
 import {browser, addClass, rmClass} from "../dom"
-import {execCommand} from "./commands"
 import {applyDOMChange, textContext, textInContext} from "./domchange"
-import {Range} from "./selection"
+import {Range, coordsAtPos, rangeFromDOMLoose} from "./selection"
 
 let stopSeq = null
+
+/**
+ * A collection of DOM events that occur within the editor, and callback functions
+ * to invoke when the event fires.
+ */
 const handlers = {}
 
 export class Input {
@@ -19,6 +25,9 @@ export class Input {
     this.pm = pm
 
     this.keySeq = null
+
+    // When the user is creating a composed character,
+    // this is set to a Composing instance.
     this.composing = null
     this.shiftKey = this.updatingComposition = false
     this.skipInput = 0
@@ -29,6 +38,8 @@ export class Input {
 
     this.storedStyles = null
     this.eventHandlers = {};
+    this.dropTarget = pm.wrapper.appendChild(elt("div", {class: "ProseMirror-drop-target"}))
+
     for (let event in handlers) {
       let handler = handlers[event]
       this.eventHandlers[event] = e => handler(pm, e);
@@ -64,8 +75,20 @@ export class Input {
   }
 }
 
+/**
+ * Dispatch a key press to the internal keymaps, which will override the default
+ * DOM behavior.
+ *
+ * @param  {ProseMirror}   pm The editor instance.
+ * @param  {string}        name The name of the key pressed.
+ * @param  {KeyboardEvent} e
+ * @return {string} If the key name has a mapping and the callback is invoked ("handled"),
+ *                  if the key name needs to be combined in sequence with the next key ("multi"),
+ *                  if there is no mapping ("nothing").
+ */
 export function dispatchKey(pm, name, e) {
   let seq = pm.input.keySeq
+  // If the previous key should be used in sequence with this one, modify the name accordingly.
   if (seq) {
     if (isModifierKey(name)) return true
     clearTimeout(stopSeq)
@@ -77,16 +100,25 @@ export function dispatchKey(pm, name, e) {
   }
 
   let handle = function(bound) {
-    let result = typeof bound == "string" ? execCommand(pm, bound) : bound(pm)
+    let result = false
+    if (Array.isArray(bound)) {
+      for (let i = 0; result === false && i < bound.length; i++)
+        result = handle(bound[i])
+    } else if (typeof bound == "string") {
+      result = pm.execCommand(bound)
+    } else {
+      result = bound(pm)
+    }
     return result !== false
   }
 
   let result
-  for (let i = pm.input.keymaps.length - 1; !result && i >= 0; i--)
-    result = lookupKey(name, pm.input.keymaps[i], handle, pm)
+  for (let i = 0; !result && i < pm.input.keymaps.length; i++)
+    result = lookupKey(name, pm.input.keymaps[i].map, handle, pm)
   if (!result)
-    result = lookupKey(name, pm.options.keymap, handle, pm)
+    result = lookupKey(name, pm.options.keymap, handle, pm) || lookupKey(name, dangerousKeys, handle, pm)
 
+  // If the key should be used in sequence with the next key, store the keyname internally.
   if (result == "multi")
     pm.input.keySeq = name
 
@@ -105,10 +137,12 @@ handlers.keydown = (pm, e) => {
   if (pm.input.composing) return
   let name = keyName(e)
   if (name) dispatchKey(pm, name, e)
+  pm.sel.pollForUpdate()
 }
 
 handlers.keyup = (pm, e) => {
   if (e.keyCode == 16) pm.input.shiftKey = false
+  pm.sel.pollForUpdate()
 }
 
 function inputText(pm, range, text) {
@@ -129,6 +163,17 @@ handlers.keypress = (pm, e) => {
   e.preventDefault()
 }
 
+handlers.mousedown = handlers.touchdown = pm => {
+  pm.sel.pollForUpdate()
+}
+
+handlers.mousemove = (pm, e) => {
+  if (e.which || e.button) pm.sel.pollForUpdate()
+}
+
+/**
+ * A class to track state while creating a composed character.
+ */
 class Composing {
   constructor(pm, data) {
     this.finished = false
@@ -160,7 +205,7 @@ handlers.compositionupdate = (pm, e) => {
     pm.input.updatingComposition = true
     inputText(pm, info.range, info.data)
     pm.input.updatingComposition = false
-    info.range = new Range(info.range.from, info.range.from.shift(info.data.length))
+    info.range = new Range(info.range.from, info.range.from.move(info.data.length))
   }
 }
 
@@ -176,9 +221,11 @@ handlers.compositionend = (pm, e) => {
 function finishComposing(pm) {
   let info = pm.input.composing
   let text = textInContext(info.context, info.endData)
-  if (text != info.data) pm.ensureOperation()
+  let range = rangeFromDOMLoose(pm)
+  pm.ensureOperation()
   pm.input.composing = null
   if (text != info.data) inputText(pm, info.range, text)
+  if (range && range.cmp(pm.sel.range)) pm.setSelection(range)
 }
 
 handlers.input = (pm) => {
@@ -189,10 +236,9 @@ handlers.input = (pm) => {
     return
   }
 
-  pm.input.suppressPolling = true
   applyDOMChange(pm)
-  pm.input.suppressPolling = false
-  pm.sel.poll(true)
+  // FIXME use our own idea of the selection?
+  pm.sel.pollForUpdate()
   pm.scrollIntoView()
 }
 
@@ -203,7 +249,7 @@ handlers.copy = handlers.cut = (pm, e) => {
   if (sel.empty) return
   let fragment = pm.selectedDoc
   lastCopied = {doc: pm.doc, from: sel.from, to: sel.to,
-                html: toHTML(fragment, {document}),
+                html: toHTML(fragment, {target: "copy"}),
                 text: toText(fragment)}
 
   if (e.clipboardData) {
@@ -231,7 +277,7 @@ handlers.paste = (pm, e) => {
     } else if (lastCopied && (lastCopied.html == html || lastCopied.text == txt)) {
       ;({doc, from, to} = lastCopied)
     } else if (html) {
-      doc = fromHTML(pm.schema, html, {document})
+      doc = fromHTML(pm.schema, html, {source: "paste"})
     } else {
       doc = convertFrom(pm.schema, txt, knownSource("markdown") ? "markdown" : "text")
     }
@@ -245,21 +291,37 @@ handlers.dragstart = (pm, e) => {
 
   let fragment = pm.selectedDoc
 
-  e.dataTransfer.setData("text/html", toHTML(fragment, {document}))
+  e.dataTransfer.setData("text/html", toHTML(fragment, {target: "copy"}))
   e.dataTransfer.setData("text/plain", toText(fragment) + "??")
   pm.input.draggingFrom = true
 }
 
 handlers.dragend = pm => window.setTimeout(() => pm.input.dragginFrom = false, 50)
 
-handlers.dragover = handlers.dragenter = (_, e) => e.preventDefault()
+handlers.dragover = handlers.dragenter = (pm, e) => {
+  e.preventDefault()
+  let cursorPos = pm.posAtCoords({left: e.clientX, top: e.clientY})
+  let coords = coordsAtPos(pm, cursorPos)
+  let rect = pm.wrapper.getBoundingClientRect()
+  coords.top -= rect.top
+  coords.right -= rect.left
+  coords.bottom -= rect.top
+  coords.left -= rect.left
+  let target = pm.input.dropTarget
+  target.style.display = "block"
+  target.style.left = (coords.left - 1) + "px"
+  target.style.top = coords.top + "px"
+  target.style.height = (coords.bottom - coords.top) + "px"
+}
+
+handlers.dragleave = pm => pm.input.dropTarget.style.display = ""
 
 handlers.drop = (pm, e) => {
   if (!e.dataTransfer) return
 
   let html, txt, doc
   if (html = e.dataTransfer.getData("text/html"))
-    doc = fromHTML(pm.schema, html, {document})
+    doc = fromHTML(pm.schema, html, {source: "paste"})
   else if (txt = e.dataTransfer.getData("text/plain"))
     doc = convertFrom(pm.schema, txt, knownSource("markdown") ? "markdown" : "text")
 
@@ -277,6 +339,8 @@ handlers.drop = (pm, e) => {
     pm.setSelection(new Range(insertPos, tr.map(insertPos).pos))
     pm.focus()
   }
+
+  pm.input.dropTarget.style.display = ""
 }
 
 handlers.focus = pm => {

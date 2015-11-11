@@ -21,8 +21,8 @@ function add(value, target) {
 }
 
 
-const reqFrame = window.requestAnimationFrame || window.mozRequestAnimationFrame ||
-      window.webkitRequestAnimationFrame || window.msRequestAnimationFrame
+const reqFrame = typeof window !== 'undefined' && (window.requestAnimationFrame || window.mozRequestAnimationFrame ||
+      window.webkitRequestAnimationFrame || window.msRequestAnimationFrame)
 
 export function requestAnimationFrame(f) {
   if (reqFrame) reqFrame(f)
@@ -30,15 +30,15 @@ export function requestAnimationFrame(f) {
 }
 
 
-const ie_upto10 = /MSIE \d/.test(navigator.userAgent)
-const ie_11up = /Trident\/(?:[7-9]|\d{2,})\..*rv:(\d+)/.exec(navigator.userAgent)
+const ie_upto10 = typeof navigator !== 'undefined' && /MSIE \d/.test(navigator.userAgent)
+const ie_11up = typeof navigator !== 'undefined' && /Trident\/(?:[7-9]|\d{2,})\..*rv:(\d+)/.exec(navigator.userAgent)
 
 export const browser = {
-  mac: /Mac/.test(navigator.platform),
+  mac: typeof navigator !== 'undefined' && /Mac/.test(navigator.platform),
   ie_upto10,
   ie_11up,
   ie: ie_upto10 || ie_11up,
-  gecko: /gecko\/\d/i.test(navigator.userAgent)
+  gecko: typeof navigator !== 'undefined' && /gecko\/\d/i.test(navigator.userAgent)
 }
 
 

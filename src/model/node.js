@@ -1,7 +1,10 @@
-import * as style from "./style"
+import {sameStyles} from "./style"
 
 const emptyArray = []
 
+/**
+ * Document node class
+ */
 export class Node {
   constructor(type, attrs) {
     this.type = type
@@ -36,15 +39,15 @@ export class BlockNode extends Node {
   constructor(type, attrs, content, styles) {
     if (styles) throw new Error("Constructing a block node with styles")
     super(type, attrs)
-    this.content = content || (type.contains ? [] : emptyArray)
+    this.content = content || emptyArray
   }
 
   toString() {
     return this.type.name + "(" + this.content.join(", ") + ")"
   }
 
-  copy(content = null) {
-    return new this.constructor(this.type, this.attrs, content)
+  copy(content = null, recompute) {
+    return new this.constructor(this.type, recompute ? this.type.recomputeAttrs(this.attrs, content) : this.attrs, content)
   }
 
   slice(from, to = this.length) {
@@ -92,8 +95,11 @@ export class BlockNode extends Node {
     return text
   }
 
+  /**
+   * Get the child node at a given index.
+   */
   child(i) {
-    if (i < 0 || i > this.length)
+    if (i < 0 || i >= this.length)
       throw new Error("Index " + i + " out of range in " + this)
     return this.content[i]
   }
@@ -105,6 +111,12 @@ export class BlockNode extends Node {
 
   get children() { return this.content }
 
+  /**
+   * Get a child node given a path.
+   *
+   * @param  {array} path
+   * @return {Node}
+   */
   path(path) {
     for (var i = 0, node = this; i < path.length; node = node.content[path[i]], i++) {}
     return node
@@ -140,6 +152,43 @@ export class BlockNode extends Node {
   }
 
   get isBlock() { return true }
+
+  nodesBetween(from, to, f, path = [], parent = null) {
+    if (f(this, path, from, to, parent) === false) return
+
+    let start, endPartial = to && to.depth > path.length
+    let end = endPartial ? to.path[path.length] : to ? to.offset : this.length
+    if (!from) {
+      start = 0
+    } else if (from.depth == path.length) {
+      start = from.offset
+    } else {
+      start = from.path[path.length] + 1
+      let passTo = null
+      if (endPartial && end == start - 1) {
+        passTo = to
+        endPartial = false
+      }
+      this.enterNode(start - 1, from, passTo, path, f)
+    }
+    for (let i = start; i < end; i++)
+      this.enterNode(i, null, null, path, f)
+    if (endPartial)
+      this.enterNode(end, null, to, path, f)
+  }
+
+  enterNode(index, from, to, path, f) {
+    path.push(index)
+    this.child(index).nodesBetween(from, to, f, path, this)
+    path.pop()
+  }
+
+  inlineNodesBetween(from, to, f) {
+    this.nodesBetween(from, to, (node, path, from, to, parent, offset) => {
+      if (node.isInline)
+        f(node, from ? from.offset : offset, to ? to.offset : offset + node.offset, path, parent)
+    })
+  }
 }
 
 export class TextblockNode extends BlockNode {
@@ -173,6 +222,19 @@ export class TextblockNode extends BlockNode {
   }
 
   get isTextblock() { return true }
+
+  nodesBetween(from, to, f, path, parent) {
+    if (f(this, path, from, to, parent) === false) return
+    let start = from ? from.offset : 0, end = to ? to.offset : this.maxOffset
+    if (start == end) return
+    for (let offset = 0, i = 0; i < this.length; i++) {
+      let child = this.child(i), endOffset = offset + child.offset
+      if (endOffset >= start)
+        f(child, path, offset < start ? from : null, endOffset > end ? to : null, this, offset)
+      if (endOffset >= end) break
+      offset = endOffset
+    }
+  }
 }
 
 export class InlineNode extends Node {
@@ -194,7 +256,7 @@ export class InlineNode extends Node {
 
   toJSON() {
     let obj = super.toJSON()
-    if (this.styles.length) obj.styles = this.styles
+    if (this.styles.length) obj.styles = this.styles.map(s => s.toJSON())
     return obj
   }
 
@@ -205,7 +267,8 @@ export class InlineNode extends Node {
 
 export class TextNode extends InlineNode {
   constructor(type, attrs, content, styles) {
-    if (typeof content != "string") throw new Error("Passing non-string as text node content")
+    if (typeof content != "string" || !content)
+      throw new Error("Text node content must be a non-empty string")
     super(type, attrs, null, styles)
     this.text = content
   }
@@ -215,7 +278,7 @@ export class TextNode extends InlineNode {
   get textContent() { return this.text }
 
   maybeMerge(other) {
-    if (other.type == this.type && style.sameSet(this.styles, other.styles))
+    if (other.type == this.type && sameStyles(this.styles, other.styles))
       return new TextNode(this.type, this.attrs, this.text + other.text, this.styles)
   }
 
@@ -226,7 +289,7 @@ export class TextNode extends InlineNode {
   toString() {
     let text = JSON.stringify(this.text)
     for (let i = 0; i < this.styles.length; i++)
-      text += this.styles[i].type + "(" + text + ")"
+      text = this.styles[i].type.name + "(" + text + ")"
     return text
   }
 

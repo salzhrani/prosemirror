@@ -1,20 +1,32 @@
-import {spanStylesAt, rangeHasStyle, style, sliceBetween, Pos} from "../model"
+import {spanStylesAt, rangeHasStyle, sliceBetween, Pos, findDiffStart,
+        containsStyle, removeStyle} from "../model"
 import {Transform} from "../transform"
+import sortedInsert from "../util/sortedinsert"
 
 import {parseOptions, initOptions, setOption} from "./options"
-import {Selection, Range, posAtCoords, coordsAtPos, scrollIntoView, hasFocus} from "./selection"
+import {Selection, Range, posAtCoords, posFromDOM, coordsAtPos, scrollIntoView, hasFocus} from "./selection"
 import {requestAnimationFrame, elt} from "../dom"
 import {draw, redraw} from "./draw"
 import {Input} from "./input"
 import {History} from "./history"
 import {eventMixin} from "./event"
-import {toText} from "../convert/to_text"
-import "../convert/from_text"
-import {convertFrom, convertTo} from "../convert"
-import {execCommand} from "./commands"
+import {toText} from "../serialize/text"
+import "../parse/text"
+import {convertFrom} from "../parse"
+import {convertTo} from "../serialize"
+import {initCommands} from "./commands"
 import {RangeStore, MarkedRange} from "./range"
 
+/**
+ * ProseMirror editor class.
+ * @class
+ */
 export class ProseMirror {
+  /**
+   * @param {Object} opts        Instance options hash.
+   * @param {Object} opts.schema The document model schema for the editor instance.
+   * @param {Object} opts.doc    The document model for the instance. Optional.
+   */
   constructor(opts) {
     opts = this.options = parseOptions(opts)
     this.schema = opts.schema
@@ -39,14 +51,32 @@ export class ProseMirror {
     this.sel = new Selection(this)
     this.input = new Input(this)
 
+    this.commands = initCommands(this.schema)
+
     initOptions(this)
   }
+
   destroy(){
     this.input.removeHandlers()
   }
+
+  /**
+   * @return {Range} The instance of the editor's selection range.
+   */
   get selection() {
+    // FIXME only start an op when selection actually changed?
     this.ensureOperation()
     return this.sel.range
+  }
+
+  get selectedNode() {
+    this.ensureOperation()
+    return this.sel.selectedNode()
+  }
+
+  get selectedNodePath() {
+    this.ensureOperation()
+    return this.sel.node
   }
 
   get selectedDoc() {
@@ -58,6 +88,9 @@ export class ProseMirror {
     return toText(this.selectedDoc)
   }
 
+  /**
+   * Apply a transform on the editor.
+   */
   apply(transform, options = nullOptions) {
     if (transform.doc == this.doc) return false
     if (transform.docs[0] != this.doc && findDiffStart(transform.docs[0], this.doc))
@@ -65,22 +98,26 @@ export class ProseMirror {
 
     this.updateDoc(transform.doc, transform)
     this.signal("transform", transform, options)
+    if (options.scrollIntoView) this.scrollIntoView()
     return transform
   }
 
+  /**
+   * @return {Transform} A new transform object.
+   */
   get tr() { return new Transform(this.doc) }
 
   setContent(value, format) {
-    if (format) value = convertFrom(this.schema, value, format, {document})
+    if (format) value = convertFrom(this.schema, value, format)
     this.setDoc(value)
   }
 
   getContent(format) {
-    return format ? convertTo(this.doc, format, {document}) : this.doc
+    return format ? convertTo(this.doc, format) : this.doc
   }
 
   setDocInner(doc) {
-    if (doc.type != this.schema.nodeTypes.doc)
+    if (doc.type != this.schema.nodes.doc)
       throw new Error("Trying to set a document with a different schema")
     this.doc = doc
     this.ranges = new RangeStore(this)
@@ -104,9 +141,7 @@ export class ProseMirror {
     this.input.maybeAbortComposition()
     this.ranges.transform(mapping)
     this.doc = doc
-    let range = this.sel.range
-    this.sel.setAndSignal(new Range(mapping.map(range.anchor).pos,
-                                    mapping.map(range.head).pos))
+    this.sel.map(mapping)
     this.signal("change")
   }
 
@@ -128,9 +163,15 @@ export class ProseMirror {
       this.sel.setAndSignal(range)
   }
 
+  setNodeSelection(pos) {
+    this.checkPos(pos, false)
+    this.input.maybeAbortComposition()
+    this.sel.setNodeAndSignal(pos)
+  }
+
   ensureOperation() {
     if (!this.operation) {
-      if (!this.input.suppressPolling) this.sel.poll()
+      this.sel.beforeStartOp()
       this.operation = new Operation(this)
     }
     if (!this.flushScheduled) {
@@ -148,15 +189,19 @@ export class ProseMirror {
     if (!op || !document.body.contains(this.wrapper)) return
     this.operation = null
 
-    let docChanged = op.doc != this.doc || this.ranges.dirty.size
-    if (docChanged && !this.input.composing) {
+    let docChanged = op.doc != this.doc || this.ranges.dirty.size, redrawn = false
+    if (!this.input.composing && (docChanged || op.composingAtStart)) {
       if (op.fullRedraw) draw(this, this.doc) // FIXME only redraw target block composition
       else redraw(this, this.ranges.dirty, this.doc, op.doc)
       this.ranges.resetDirty()
+      redrawn = true
     }
-    if ((docChanged || op.sel.anchor.cmp(this.sel.range.anchor) || op.sel.head.cmp(this.sel.range.head)) &&
-        !this.input.composing)
-      this.sel.toDOM(docChanged, op.focus)
+    if ((redrawn ||
+         op.sel.anchor.cmp(this.sel.range.anchor) || op.sel.head.cmp(this.sel.range.head) ||
+         (op.selNode ? !this.sel.node || this.sel.node.cmp(op.selNode) : this.sel.node)) &&
+        !this.input.composing) {
+      this.sel.toDOM(op.focus)
+    }
     if (op.scrollIntoView !== false)
       scrollIntoView(this, op.scrollIntoView)
     if (docChanged) this.signal("draw")
@@ -166,13 +211,13 @@ export class ProseMirror {
   setOption(name, value) { setOption(this, name, value) }
   getOption(name) { return this.options[name] }
 
-  addKeymap(map, bottom) {
-    this.input.keymaps[bottom ? "push" : "unshift"](map)
+  addKeymap(map, rank = 50) {
+    sortedInsert(this.input.keymaps, {map, rank}, (a, b) => a.rank - b.rank)
   }
 
   removeKeymap(map) {
     let maps = this.input.keymaps
-    for (let i = 0; i < maps.length; ++i) if (maps[i] == map || maps[i].options.name == map) {
+    for (let i = 0; i < maps.length; ++i) if (maps[i].map == map || maps[i].map.options.name == map) {
       maps.splice(i, 1)
       return true
     }
@@ -190,12 +235,14 @@ export class ProseMirror {
     this.ranges.removeRange(range)
   }
 
+  // FIXME stop requiring marker instance?
   setStyle(st, to) {
     let sel = this.selection
     if (sel.empty) {
       let styles = this.activeStyles()
-      if (to == null) to = !style.containsType(styles, st.type)
-      this.input.storedStyles = to ? style.add(styles, st) : style.removeType(styles, st.type)
+      if (to == null) to = !containsStyle(styles, st.type)
+      if (to && !this.doc.path(sel.head.path).type.canContainStyle(st.type)) return
+      this.input.storedStyles = to ? st.addToSet(styles) : removeStyle(styles, st.type)
       this.signal("activeStyleChange")
     } else {
       if (to != null ? to : !rangeHasStyle(this.doc, sel.from, sel.to, st.type))
@@ -211,7 +258,7 @@ export class ProseMirror {
 
   focus() {
     if (this.operation) this.operation.focus = true
-    else this.sel.toDOM(false, true)
+    else this.sel.toDOM(true)
   }
 
   hasFocus() {
@@ -220,6 +267,14 @@ export class ProseMirror {
 
   posAtCoords(coords) {
     return posAtCoords(this, coords)
+  }
+
+  posFromDOM(element, offset, textblock) {
+    // FIXME do some input checking
+    let pos = posFromDOM(this, element, offset)
+    if (textblock !== false && !this.doc.path(pos.path).isTextblock)
+      pos = Pos.near(this.doc, pos)
+    return pos
   }
 
   coordsAtPos(pos) {
@@ -233,7 +288,10 @@ export class ProseMirror {
     this.operation.scrollIntoView = pos
   }
 
-  execCommand(name) { execCommand(this, name) }
+  execCommand(name, params) {
+    let cmd = this.commands[name]
+    return !!(cmd && cmd.exec(this, params) !== false)
+  }
 }
 
 const nullOptions = {}
@@ -244,8 +302,10 @@ class Operation {
   constructor(pm) {
     this.doc = pm.doc
     this.sel = pm.sel.range
+    this.selNode = pm.sel.node
     this.scrollIntoView = false
     this.focus = false
-    this.fullRedraw = !!pm.input.composing
+    this.fullRedraw = false
+    this.composingAtStart = !!pm.input.composing
   }
 }

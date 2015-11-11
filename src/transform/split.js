@@ -16,7 +16,7 @@ defineStep("split", {
     let splitAt = pos.offset
     let newParent = parent.splice(offset, offset + 1,
                                   [target.copy(target.slice(0, splitAt)),
-                                   (step.param || target).copy(target.slice(splitAt))])
+                                   (step.param || target).copy(target.slice(splitAt), true)])
     let copy = doc.replaceDeep(parentPath, newParent)
 
     let dest = new Pos(parentPath.concat(offset + 1), 0)
@@ -45,4 +45,13 @@ Transform.prototype.split = function(pos, depth = 1, nodeAfter = null) {
     nodeAfter = null
     pos = pos.shorten(null, 1)
   }
+}
+
+Transform.prototype.splitIfNeeded = function(pos, depth = 1) {
+  for (let off = 0; off < depth; off++) {
+    let here = pos.shorten(pos.depth - off)
+    if (here.offset && here.offset < this.doc.path(here.path).maxOffset)
+      this.step("split", null, null, here)
+  }
+  return this
 }
