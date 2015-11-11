@@ -10,7 +10,7 @@ import {isModifierKey, lookupKey, keyName} from "./keys"
 import {dangerousKeys} from "./dangerouskeys"
 import {browser, addClass, rmClass} from "../dom"
 import {applyDOMChange, textContext, textInContext} from "./domchange"
-import {Range, coordsAtPos, rangeFromDOMLoose} from "./selection"
+import {SelectionRange, coordsAtPos, rangeFromDOMLoose, selectableNodeUnder} from "./selection"
 
 let stopSeq = null
 
@@ -38,6 +38,8 @@ export class Input {
 
     this.storedStyles = null
     this.eventHandlers = {};
+    this.dropTarget = pm.wrapper.appendChild(elt("div", {class: "ProseMirror-drop-target"}))
+
     this.dropTarget = pm.wrapper.appendChild(elt("div", {class: "ProseMirror-drop-target"}))
 
     for (let event in handlers) {
@@ -136,7 +138,7 @@ handlers.keydown = (pm, e) => {
   if (e.keyCode == 16) pm.input.shiftKey = true
   if (pm.input.composing) return
   let name = keyName(e)
-  if (name) dispatchKey(pm, name, e)
+  if (name && dispatchKey(pm, name, e)) return
   pm.sel.pollForUpdate()
 }
 
@@ -159,11 +161,29 @@ handlers.keypress = (pm, e) => {
   if (pm.input.composing || !e.charCode || e.ctrlKey && !e.altKey || browser.mac && e.metaKey) return
   let ch = String.fromCharCode(e.charCode)
   if (dispatchKey(pm, "'" + ch + "'", e)) return
-  inputText(pm, pm.selection, ch)
+  let sel = pm.selection
+  if (sel.nodePos && sel.node.contains == null) {
+    pm.apply(pm.tr.delete(sel.nodePos, sel.nodePos.move(1)))
+    sel = pm.selection
+  }
+  inputText(pm, sel, ch)
   e.preventDefault()
 }
 
-handlers.mousedown = handlers.touchdown = pm => {
+handlers.mousedown = (pm, e) => {
+  // FIXME ignore double- and triple-clicks, drags
+  let path = !pm.input.shiftKey && selectableNodeUnder(pm, {left: e.clientX, top: e.clientY})
+  if (path) {
+    pm.setNodeSelection(path)
+    pm.focus()
+    e.preventDefault()
+  } else {
+    pm.sel.pollForUpdate()
+  }
+}
+
+handlers.touchdown = pm => {
+  // FIXME
   pm.sel.pollForUpdate()
 }
 
@@ -185,7 +205,7 @@ class Composing {
       let path = range.head.path, line = pm.doc.path(path).textContent
       let found = line.indexOf(data, range.head.offset - data.length)
       if (found > -1 && found <= range.head.offset + data.length)
-        range = new Range(new Pos(path, found), new Pos(path, found + data.length))
+        range = new SelectionRange(pm.doc, new Pos(path, found), new Pos(path, found + data.length))
     }
     this.range = range
   }
@@ -205,7 +225,7 @@ handlers.compositionupdate = (pm, e) => {
     pm.input.updatingComposition = true
     inputText(pm, info.range, info.data)
     pm.input.updatingComposition = false
-    info.range = new Range(info.range.from, info.range.from.move(info.data.length))
+    info.range = new SelectionRange(pm.doc, info.range.from, info.range.from.move(info.data.length))
   }
 }
 
@@ -336,7 +356,7 @@ handlers.drop = (pm, e) => {
     }
     tr.replace(insertPos, insertPos, doc, Pos.start(doc), Pos.end(doc))
     pm.apply(tr)
-    pm.setSelection(new Range(insertPos, tr.map(insertPos).pos))
+    pm.setSelection(new SelectionRange(pm.doc, insertPos, tr.map(insertPos).pos))
     pm.focus()
   }
 

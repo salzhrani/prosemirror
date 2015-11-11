@@ -25,7 +25,7 @@ insertCSS(`
 }
 
 .ProseMirror-content ul, .ProseMirror-content ol {
-  padding-left: 2em;
+  padding-left: 30px;
 }
 
 .ProseMirror-content blockquote {
@@ -42,10 +42,6 @@ insertCSS(`
   outline: 2px solid #8cf;
 }
 
-img.ProseMirror-selectednode::selection {
-  background: transparent;
-}
-
 .ProseMirror-content p:first-child,
 .ProseMirror-content h1:first-child,
 .ProseMirror-content h2:first-child,
@@ -56,33 +52,40 @@ img.ProseMirror-selectednode::selection {
   margin-top: .3em;
 }
 
-.ProseMirror-content ul, .ProseMirror-content ol {
-  padding-left: 0;
+/* Add space around the hr to make clicking it easier */
+
+.ProseMirror-content hr {
+  position: relative;
+  height: 6px;
+  border: none;
 }
 
+.ProseMirror-content hr:after {
+  content: "";
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  top: 2px;
+  border-top: 2px solid silver;
+}
+
+/* Make sure li selections wrap around markers */
+
 .ProseMirror-content li {
-  list-style-type: none;
-  padding-left: 32px;
   position: relative;
 }
 
-.ProseMirror-content li:before {
+li.ProseMirror-selectednode {
+  outline: none;
+}
+
+li.ProseMirror-selectednode:after {
+  content: "";
   position: absolute;
-  right: calc(100% - 32px);
-  padding-right: 8px;
+  left: -32px;
+  right: -2px; top: -2px; bottom: -2px;
+  border: 2px solid #8cf;
 }
 
-.ProseMirror-content ul > li:before { content: "●" }
-.ProseMirror-content ul ul > li:before { content: "○" }
-.ProseMirror-content ul ul ul > li:before { content: "◾" }
-
-.ProseMirror-content ol {
-  counter-reset: prosemirror-list;
-}
-
-.ProseMirror-content ol > li:before {
-  counter-increment: prosemirror-list;
-  content: counter(prosemirror-list) ".";
-}
 
 `)

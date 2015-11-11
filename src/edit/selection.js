@@ -1,4 +1,4 @@
-import {Pos, spanAtOrBefore} from "../model"
+import {Pos} from "../model"
 
 import {contains, browser} from "../dom"
 
@@ -7,8 +7,8 @@ export class Selection {
     this.pm = pm
 
     let start = Pos.start(pm.doc)
-    this.range = new Range(start, start)
-    this.node = null
+    this.range = new SelectionRange(pm.doc, start, start)
+    this.lastNonNodePos = null
 
     this.pollState = null
     this.pollTimeout = null
@@ -25,7 +25,7 @@ export class Selection {
 
   set(range, clearLast) {
     this.range = range
-    this.node = null
+    if (!range.nodePos) this.lastNonNodePos = null
     if (clearLast !== false) this.lastAnchorNode = null
   }
 
@@ -38,8 +38,7 @@ export class Selection {
       if (!rangeFrom) rangeFrom = rangeTo
       if (rangeFrom.cmp(rangeTo) > 0) rangeTo = rangeFrom
     }
-    this.set(new Range(rangeFrom, rangeTo), false)
-    this.node = pos
+    this.set(new SelectionRange(this.pm.doc, rangeFrom, rangeTo, pos))
   }
 
   setNodeAndSignal(pos) {
@@ -47,26 +46,20 @@ export class Selection {
     this.pm.signal("selectionChange")
   }
 
-  selectedNode() {
-    if (!this.node) return null
-    let parent = this.pm.doc.path(this.node.path)
-    if (parent.isTextblock)
-      return spanAtOrBefore(parent, this.node.offset + 1)
-    else
-      return parent.child(this.node.offset)
-  }
-
   map(mapping) {
-    if (this.node) {
-      let newFrom = mapping.map(this.node, 1).pos
-      let newTo = mapping.map(this.node, -1).pos
-      if (newTo.cmp(newFrom.move(1)) == 0) {
-        this.setNodeAndSignal(newFrom)
-        return
-      }
+    let node = this.range.nodePos
+    if (node) {
+      let newFrom = mapping.map(node, 1).pos
+      let newTo = mapping.map(node.move(1), -1).pos
+      if (newTo.cmp(newFrom.move(1)) == 0)
+        node = newFrom
+      else
+        node = null
     }
-    this.setAndSignal(new Range(mapping.map(this.range.anchor).pos,
-                                mapping.map(this.range.head).pos))
+    return new SelectionRange(this.pm.doc,
+                              Pos.near(this.pm.doc, mapping.map(this.range.anchor).pos, 1),
+                              Pos.near(this.pm.doc, mapping.map(this.range.head).pos, 1),
+                              node)
   }
 
   pollForUpdate() {
@@ -97,13 +90,13 @@ export class Selection {
   readUpdate() {
     if (this.pm.input.composing || !hasFocus(this.pm) || !this.domChanged()) return false
 
-    let sel = getSelection()
+    let sel = getSelection(), doc = this.pm.doc
     let anchor = posFromDOMInner(this.pm, sel.anchorNode, sel.anchorOffset)
     let head = posFromDOMInner(this.pm, sel.focusNode, sel.focusOffset)
     this.lastAnchorNode = sel.anchorNode; this.lastAnchorOffset = sel.anchorOffset
     this.lastHeadNode = sel.focusNode; this.lastHeadOffset = sel.focusOffset
-    this.setAndSignal(new Range(moveToTextblock(this.pm.doc, anchor, this.range.anchor),
-                                moveToTextblock(this.pm.doc, head, this.range.head)))
+    this.setAndSignal(new SelectionRange(doc, Pos.near(doc, anchor, anchor.cmp(this.range.anchor)),
+                                         Pos.near(doc, head, head.cmp(this.range.head))))
     this.toDOM()
     return true
   }
@@ -128,7 +121,7 @@ export class Selection {
   }
 
   toDOM(takeFocus) {
-    if (this.node)
+    if (this.range.nodePos)
       this.nodeToDOM(takeFocus)
     else
       this.rangeToDOM(takeFocus)
@@ -137,7 +130,7 @@ export class Selection {
   nodeToDOM(takeFocus) {
     window.getSelection().removeAllRanges()
     if (takeFocus) this.pm.content.focus()
-    let pos = this.node, node = this.selectedNode, dom
+    let pos = this.range.nodePos, node = this.range.node, dom
     if (node.isInline)
       dom = findByOffset(resolvePath(this.pm.content, pos.path), pos.offset, true).node
     else
@@ -152,14 +145,13 @@ export class Selection {
     if (this.lastNode) {
       clearNodeSelection(this.lastNode)
       this.lastNode = null
+      return true
     }
   }
 
   rangeToDOM(takeFocus) {
-    this.clearNode()
-
     let sel = window.getSelection()
-    if (!hasFocus(this.pm)) {
+    if (!this.clearNode() && !hasFocus(this.pm)) {
       if (!takeFocus) return
       // See https://bugzilla.mozilla.org/show_bug.cgi?id=921444
       else if (browser.gecko) this.pm.content.focus()
@@ -222,17 +214,40 @@ function windowRect() {
  * A range consists of a head (the active location of the cursor)
  * and an anchor (the start location of the selection).
  */
-export class Range {
-  constructor(anchor, head) {
+export class SelectionRange {
+  constructor(doc, anchor, head, nodePos) {
+    this.doc = doc
     this.anchor = anchor
     this.head = head
+    this.nodePos = nodePos
   }
 
   get inverted() { return this.anchor.cmp(this.head) > 0 }
   get from() { return this.inverted ? this.head : this.anchor }
   get to() { return this.inverted ? this.anchor : this.head }
   get empty() { return this.anchor.cmp(this.head) == 0 }
-  cmp(other) { return this.anchor.cmp(other.anchor) || this.head.cmp(other.head) }
+  cmp(other) {
+    if (this.nodePos) {
+      if (!other.nodePos) return 1
+      return this.nodePos.cmp(other.nodePos)
+    } else if (other.nodePos) {
+      return -1
+    } else {
+      return this.anchor.cmp(other.anchor) || this.head.cmp(other.head)
+    }
+  }
+
+  get node() {
+    if (!this.nodePos) return null
+    let parent = this.doc.path(this.nodePos.path)
+    if (parent.isTextblock)
+      return parent.childAfter(this.nodePos.offset).node
+    else
+      return parent.child(this.nodePos.offset)
+  }
+  get cursor() {
+    return !this.nodePos && this.empty
+  }
 }
 
 function pathFromNode(node) {
@@ -270,7 +285,7 @@ function posFromDOMInner(pm, node, domOffset, loose) {
     if (child.nodeType == 3) {
       if (loose) extraOffset += child.nodeValue.length
     } else if (tag = child.getAttribute("pm-span")) {
-      offset = +/^\d+-(\d+)/.exec(tag)[1]
+      offset = parseSpan(tag).to
       break
     } else if (tag = child.getAttribute("pm-path")) {
       offset = +tag + 1
@@ -281,13 +296,6 @@ function posFromDOMInner(pm, node, domOffset, loose) {
     }
   }
   return new Pos(pathFromNode(node), offset + extraOffset)
-}
-
-function moveToTextblock(doc, pos, old) {
-  if (doc.path(pos.path).isTextblock) return pos
-  let dir = pos.cmp(old)
-  return (dir < 0 ? Pos.before(doc, pos) : Pos.after(doc, pos)) ||
-    (dir >= 0 ? Pos.before(doc, pos) : Pos.after(doc, pos))
 }
 
 export function posFromDOM(pm, node, offset) {
@@ -301,8 +309,9 @@ export function posFromDOM(pm, node, offset) {
 export function rangeFromDOMLoose(pm) {
   if (!hasFocus(pm)) return null
   let sel = getSelection()
-  return new Range(posFromDOMInner(pm, sel.anchorNode, sel.anchorOffset, true),
-                   posFromDOMInner(pm, sel.focusNode, sel.focusOffset, true))
+  return new SelectionRange(pm.doc,
+                            posFromDOMInner(pm, sel.anchorNode, sel.anchorOffset, true),
+                            posFromDOMInner(pm, sel.focusNode, sel.focusOffset, true))
 }
 
 export function findByPath(node, n, fromEnd) {
@@ -328,12 +337,17 @@ export function resolvePath(parent, path) {
   return node
 }
 
+function parseSpan(span) {
+  let [_, from, to] = /^(\d+)-(\d+)$/.exec(span)
+  return {from: +from, to: +to}
+}
+
 function findByOffset(node, offset, after) {
   function search(node, domOffset) {
     if (node.nodeType != 1) return
     let range = node.getAttribute("pm-span")
     if (range) {
-      let [_, from, to] = /(\d+)-(\d+)/.exec(range)
+      let {from, to} = parseSpan(range)
       if (after ? +from == offset : +to >= offset)
         return {node: node, parent: node.parentNode, offset: domOffset,
                 innerOffset: offset - +from}
@@ -395,6 +409,7 @@ export function hasFocus(pm) {
  * @param  {Object}      coords The x, y coordinates.
  * @return {Pos}
  */
+// FIXME fails on the space between lines
 export function posAtCoords(pm, coords) {
   let element = document.elementFromPoint(coords.left, coords.top + 1)
   if (!contains(pm.content, element)) return Pos.start(pm.doc)
@@ -427,23 +442,32 @@ function textRect(node, from, to) {
  */
 export function coordsAtPos(pm, pos) {
   let {node, offset} = DOMFromPos(pm.content, pos)
-  let rect
-  if (node.nodeType == 3 && node.nodeValue) {
-    rect = textRect(node, offset ? offset - 1 : offset, offset ? offset : offset + 1)
-  } else if (node.nodeType == 1 && node.firstChild) {
-    let child = node.childNodes[offset ? offset - 1 : offset]
-    rect = child.nodeType == 3 ? textRect(child, 0, child.nodeValue.length) : child.getBoundingClientRect()
-    // BR nodes are likely to return a useless empty rectangle. Try
-    // the node on the other side in that case.
-    if (rect.left == rect.right && offset && offset < node.childNodes.length) {
-      let otherRect = node.childNodes[offset].getBoundingClientRect()
-      if (otherRect.left != otherRect.right)
-        rect = {top: otherRect.top, bottom: otherRect.bottom, right: otherRect.left}
+  let side, rect
+  if (node.nodeType == 3) {
+    if (offset < node.nodeValue.length) {
+      rect = textRect(node, offset, offset + 1)
+      side = "left"
+    }
+    if ((!rect || rect.left == rect.right) && offset) {
+      rect = textRect(node, offset - 1, offset)
+      side = "right"
+    }
+  } else if (node.firstChild) {
+    if (offset < node.childNodes.length) {
+      let child = node.childNodes[offset]
+      rect = child.nodeType == 3 ? textRect(child, 0, child.nodeValue.length) : child.getBoundingClientRect()
+      side = "left"
+    }
+    if ((!rect || rect.left == rect.right) && offset) {
+      let child = node.childNodes[offset - 1]
+      rect = child.nodeType == 3 ? textRect(child, 0, child.nodeValue.length) : child.getBoundingClientRect()
+      side = "right"
     }
   } else {
     rect = node.getBoundingClientRect()
+    side = "left"
   }
-  let x = offset ? rect.right : rect.left
+  let x = rect[side]
   return {top: rect.top, bottom: rect.bottom, left: x, right: x}
 }
 
@@ -467,25 +491,26 @@ export function scrollIntoView(pm, pos) {
   }
 }
 
-function offsetInRects(coords, rects) {
+function offsetInRects(coords, rects, strict) {
   let {top: y, left: x} = coords
-  let minY = 1e5, minX = 1e5, offset = 0
+  let minY = 1e8, minX = 1e8, offset = 0
   for (let i = 0; i < rects.length; i++) {
     let rect = rects[i]
-    if (!rect || (rect.top == 0 && rect.bottom == 0)) continue
-    let dY = y < rect.top ? rect.top - y : y > rect.bottom ? y - rect.bottom : 0
-    if (dY > minY) continue
-    if (dY < minY) { minY = dY; minX = 1e5 }
+    if (!rect || rect.top == rect.bottom) continue
     let dX = x < rect.left ? rect.left - x : x > rect.right ? x - rect.right : 0
-    if (dX < minX) {
-      minX = dX
-      offset = Math.abs(x - rect.left) < Math.abs(x - rect.right) ? i : i + 1
+    if (dX > minX) continue
+    if (dX < minX) { minX = dX; minY = 1e8 }
+    let dY = y < rect.top ? rect.top - y : y > rect.bottom ? y - rect.bottom : 0
+    if (dY < minY) {
+      minY = dY
+      offset = x < (rect.left + rect.right) / 2 ? i : i + 1
     }
   }
+  if (strict && (minX || minY)) return null
   return offset
 }
 
-function offsetInTextNode(text, coords) {
+function offsetInTextNode(text, coords, strict) {
   let len = text.nodeValue.length
   let range = document.createRange()
   let rects = []
@@ -494,7 +519,7 @@ function offsetInTextNode(text, coords) {
     range.setStart(text, i)
     rects.push(range.getBoundingClientRect())
   }
-  return offsetInRects(coords, rects)
+  return offsetInRects(coords, rects, strict)
 }
 
 function offsetInElement(element, coords) {
@@ -507,3 +532,65 @@ function offsetInElement(element, coords) {
   }
   return offsetInRects(coords, rects)
 }
+
+function selectableBlockIn(doc, pos, dir) {
+  let node = doc.path(pos.path)
+  for (let offset = pos.offset + (dir > 0 ? 0 : -1); dir > 0 ? offset < node.maxOffset : offset >= 0; offset += dir) {
+    let child = node.child(offset)
+    if (child.isTextblock || (child.type.selectable && child.type.contains == null))
+      return pos.path.concat(offset)
+
+    let inside = selectableBlockIn(doc, new Pos(pos.path.concat(offset), dir < 0 ? child.maxOffset : 0), dir)
+    if (inside) return inside
+  }
+}
+
+export function selectableBlockFrom(doc, pos, dir) {
+  for (;;) {
+    let found = selectableBlockIn(doc, pos, dir)
+    if (found) return found
+    if (pos.depth == 0) break
+    pos = pos.shorten(null, dir > 0 ? 1 : 0)
+  }
+}
+
+export function selectableNodeUnder(pm, coords) {
+  let dom = document.elementFromPoint(coords.left, coords.top)
+  for (; dom && dom != pm.content; dom = dom.parentNode) {
+    if (dom.hasAttribute("pm-path")) {
+      let path = pathFromNode(dom)
+      let node = pm.doc.path(path)
+      return node.type.contains == null && node.type.selectable ? new Pos(path, 0).shorten() : null
+    } else if (dom.hasAttribute("pm-span-atom")) {
+      let path = pathFromNode(dom.parentNode)
+      let parent = pm.doc.path(path), span = parseSpan(dom.getAttribute("pm-span"))
+      let node = parent.childAfter(span.from).node
+      return node.type.selectable ? new Pos(path, span.from) : null
+    }
+  }
+}
+
+export function verticalMotionLeavesTextblock(pm, pos, dir) {
+  let dom = resolvePath(pm.content, pos.path)
+  let coords = coordsAtPos(pm, pos)
+  for (let child = dom.firstChild; child; child = child.nextSibling) {
+    let boxes = child.getClientRects()
+    for (let i = 0; i < boxes.length; i++) {
+      let box = boxes[i]
+      if (dir < 0 ? box.bottom < coords.top : box.top > coords.bottom)
+        return false
+    }
+  }
+  return true
+}
+
+export function setDOMSelectionToPos(pm, pos) {
+  let {node, offset} = DOMFromPos(pm.content, pos)
+  let range = document.createRange()
+  range.setEnd(node, offset)
+  range.setStart(node, offset)
+  let sel = getSelection()
+  sel.removeAllRanges()
+  sel.addRange(range)
+}
+

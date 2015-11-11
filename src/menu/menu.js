@@ -1,6 +1,5 @@
 import {Tooltip} from "./tooltip"
 import {elt} from "../dom"
-// import insertCSS from "insert-css"
 import {defineParamHandler} from "../edit"
 import sortedInsert from "../util/sortedinsert"
 
@@ -346,6 +345,19 @@ defineParamHandler("tooltip", tooltipParamHandler)
 //   width: fit-content;
 // }
 
+// FIXME check for obsolete styles
+// insertCSS(`
+
+// .ProseMirror-menu {
+//   margin: 0 -4px;
+//   line-height: 1;
+//   white-space: pre;
+// }
+// .ProseMirror-tooltip .ProseMirror-menu {
+//   width: -webkit-fit-content;
+//   width: fit-content;
+// }
+
 // .ProseMirror-tooltip-back-wrapper {
 //   padding-left: 12px;
 // }
@@ -427,3 +439,4 @@ defineParamHandler("tooltip", tooltipParamHandler)
 // }
 
 // `)
+
