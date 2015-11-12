@@ -1,4 +1,4 @@
-import {Pos, findDiffStart, findDiffEnd} from "../model"
+import {Pos, findDiffStart, findDiffEnd, siblingRange} from "../model"
 import {fromDOM} from "../parse/dom"
 import {samePathDepth} from "../transform/tree"
 
@@ -21,7 +21,7 @@ function isAtStart(pos, depth) {
 
 function parseNearSelection(pm) {
   let dom = pm.content, node = pm.doc
-  let from = pm.selection.from, to = pm.selection.to
+  let {from, to} = pm.selection
   for (let depth = 0;; depth++) {
     let toNode = node.child(to.path[depth])
     let fromStart = isAtStart(from, depth + 1)
@@ -51,8 +51,10 @@ export function applyDOMChange(pm) {
   let changeStart = findDiffStart(pm.doc, updated)
   if (changeStart) {
     let changeEnd = findDiffEndConstrained(pm.doc, updated, changeStart)
+    // Mark nodes touched by this change as 'to be redrawn'
+    pm.markRangeDirty(siblingRange(pm.doc, changeStart.a, changeEnd.a))
+
     pm.tr.replace(changeStart.a, changeEnd.a, updated, changeStart.b, changeEnd.b).apply()
-    pm.operation.fullRedraw = true
     return true
   } else {
     return false

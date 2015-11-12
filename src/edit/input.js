@@ -7,10 +7,10 @@ import {toText} from "../serialize/text"
 import {knownSource, convertFrom} from "../parse"
 
 import {isModifierKey, lookupKey, keyName} from "./keys"
-import {dangerousKeys} from "./dangerouskeys"
+import {captureKeys} from "./capturekeys"
 import {browser, addClass, rmClass} from "../dom"
 import {applyDOMChange, textContext, textInContext} from "./domchange"
-import {SelectionRange, coordsAtPos, rangeFromDOMLoose, selectableNodeUnder} from "./selection"
+import {TextSelection, coordsAtPos, rangeFromDOMLoose, selectableNodeUnder} from "./selection"
 
 let stopSeq = null
 
@@ -118,7 +118,7 @@ export function dispatchKey(pm, name, e) {
   for (let i = 0; !result && i < pm.input.keymaps.length; i++)
     result = lookupKey(name, pm.input.keymaps[i].map, handle, pm)
   if (!result)
-    result = lookupKey(name, pm.options.keymap, handle, pm) || lookupKey(name, dangerousKeys, handle, pm)
+    result = lookupKey(name, pm.options.keymap, handle, pm) || lookupKey(name, captureKeys, handle, pm)
 
   // If the key should be used in sequence with the next key, store the keyname internally.
   if (result == "multi")
@@ -162,28 +162,44 @@ handlers.keypress = (pm, e) => {
   let ch = String.fromCharCode(e.charCode)
   if (dispatchKey(pm, "'" + ch + "'", e)) return
   let sel = pm.selection
-  if (sel.nodePos && sel.node.contains == null) {
-    pm.tr.delete(sel.nodePos, sel.nodePos.move(1)).apply()
+  if (sel.node && sel.node.contains == null) {
+    pm.tr.delete(sel.from, sel.to).apply()
     sel = pm.selection
   }
   inputText(pm, sel, ch)
   e.preventDefault()
 }
 
+let lastClick = 0
+
 handlers.mousedown = (pm, e) => {
-  // FIXME ignore double- and triple-clicks, drags
-  let path = !pm.input.shiftKey && selectableNodeUnder(pm, {left: e.clientX, top: e.clientY})
-  if (path) {
-    pm.setNodeSelection(path)
-    pm.focus()
-    e.preventDefault()
-  } else {
-    pm.sel.pollForUpdate()
+  pm.sel.pollForUpdate()
+
+  let now = Date.now(), multi = now - lastClick < 500
+  lastClick = now
+  if (pm.input.shiftKey || multi) return
+
+  let x = e.clientX, y = e.clientY
+  let done = () => {
+    removeEventListener("mouseup", up)
+    removeEventListener("mousemove", move)
   }
+  let up = () => {
+    done()
+    let path = selectableNodeUnder(pm, {left: e.clientX, top: e.clientY})
+    if (path) {
+      pm.setNodeSelection(path)
+      pm.focus()
+    }
+  }
+  let move = e => {
+    if (Math.abs(x - e.clientX) > 4 || Math.abs(y - e.clientY) > 4) done()
+  }
+  addEventListener("mouseup", up)
+  addEventListener("mousemove", move)
 }
 
 handlers.touchdown = pm => {
-  // FIXME
   pm.sel.pollForUpdate()
 }
 
@@ -205,7 +221,7 @@ class Composing {
       let path = range.head.path, line = pm.doc.path(path).textContent
       let found = line.indexOf(data, range.head.offset - data.length)
       if (found > -1 && found <= range.head.offset + data.length)
-        range = new SelectionRange(pm.doc, new Pos(path, found), new Pos(path, found + data.length))
+        range = new TextSelection(new Pos(path, found), new Pos(path, found + data.length))
     }
     this.range = range
   }
@@ -216,6 +232,8 @@ handlers.compositionstart = (pm, e) => {
 
   pm.flush()
   pm.input.composing = new Composing(pm, e.data)
+  let above = pm.selection.head.shorten()
+  pm.markRangeDirty({from: above, to: above.move(1)})
 }
 
 handlers.compositionupdate = (pm, e) => {
@@ -225,7 +243,7 @@ handlers.compositionupdate = (pm, e) => {
     pm.input.updatingComposition = true
     inputText(pm, info.range, info.data)
     pm.input.updatingComposition = false
-    info.range = new SelectionRange(pm.doc, info.range.from, info.range.from.move(info.data.length))
+    info.range = new TextSelection(info.range.from, info.range.from.move(info.data.length))
   }
 }
 
@@ -245,7 +263,7 @@ function finishComposing(pm) {
   pm.ensureOperation()
   pm.input.composing = null
   if (text != info.data) inputText(pm, info.range, text)
-  if (range && range.cmp(pm.sel.range)) pm.setSelection(range)
+  if (range && !range.eq(pm.sel.range)) pm.setSelection(range)
 }
 
 handlers.input = (pm) => {
@@ -257,18 +275,16 @@ handlers.input = (pm) => {
   }
 
   applyDOMChange(pm)
-  // FIXME use our own idea of the selection?
-  pm.sel.pollForUpdate()
   pm.scrollIntoView()
 }
 
 let lastCopied = null
 
 handlers.copy = handlers.cut = (pm, e) => {
-  let sel = pm.selection
-  if (sel.empty) return
+  let {from, to, empty} = pm.selection
+  if (empty) return
   let fragment = pm.selectedDoc
-  lastCopied = {doc: pm.doc, from: sel.from, to: sel.to,
+  lastCopied = {doc: pm.doc, from, to,
                 html: toHTML(fragment, {target: "copy"}),
                 text: toText(fragment)}
 
@@ -277,8 +293,9 @@ handlers.copy = handlers.cut = (pm, e) => {
     e.clipboardData.clearData()
     e.clipboardData.setData("text/html", lastCopied.html)
     e.clipboardData.setData("text/plain", lastCopied.text)
-    if (e.type == "cut" && !sel.empty)
-      pm.tr.delete(sel.from, sel.to).apply()
+    // FIXME ensure invariants are maintained in case of node selection
+    if (e.type == "cut" && !empty)
+      pm.tr.delete(from, to).apply()
   }
 }
 
@@ -301,6 +318,7 @@ handlers.paste = (pm, e) => {
     } else {
       doc = convertFrom(pm.schema, txt, knownSource("markdown") ? "markdown" : "text")
     }
+    // FIXME ensure that this doesn't violate invariants when a node is selected
     pm.tr.replace(sel.from, sel.to, doc, from || Pos.start(doc), to || Pos.end(doc)).apply()
     pm.scrollIntoView()
   }
@@ -350,12 +368,11 @@ handlers.drop = (pm, e) => {
     let insertPos = pm.posAtCoords({left: e.clientX, top: e.clientY})
     let tr = pm.tr
     if (pm.input.draggingFrom && !e.ctrlKey) {
-      let sel = pm.selection
-      tr.delete(sel.from, sel.to)
+      tr.clearSelection()
       insertPos = tr.map(insertPos).pos
     }
     tr.replace(insertPos, insertPos, doc, Pos.start(doc), Pos.end(doc)).apply()
-    pm.setSelection(new SelectionRange(pm.doc, insertPos, tr.map(insertPos).pos))
+    pm.setSelection(insertPos, tr.map(insertPos).pos)
     pm.focus()
   }
 

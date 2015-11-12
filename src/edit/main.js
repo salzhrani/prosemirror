@@ -2,9 +2,10 @@ import {spanStylesAt, rangeHasStyle, sliceBetween, Pos, findDiffStart,
         containsStyle, removeStyle} from "../model"
 import {Transform} from "../transform"
 import sortedInsert from "../util/sortedinsert"
+import {Map} from "../util/map"
 
 import {parseOptions, initOptions, setOption} from "./options"
-import {Selection, SelectionRange, posAtCoords, posFromDOM, coordsAtPos,
+import {Selection, TextSelection, NodeSelection, posAtCoords, posFromDOM, coordsAtPos,
         scrollIntoView, hasFocus} from "./selection"
 import {requestAnimationFrame, elt, browser} from "../dom"
 import {draw, redraw} from "./draw"
@@ -48,6 +49,7 @@ export class ProseMirror {
     this.content.style.whiteSpace = 'pre-wrap'
     this.mod = Object.create(null)
     this.operation = null
+    this.dirtyNodes = new Map // Maps node object to 1 (re-scan content) or 2 (redraw entirely)
     this.flushScheduled = false
 
     this.sel = new Selection(this)
@@ -130,7 +132,7 @@ export class ProseMirror {
   setDoc(doc, sel) {
     if (!sel) {
       let start = Pos.start(doc)
-      sel = new SelectionRange(this.doc, start, start)
+      sel = new TextSelection(start)
     }
     this.signal("beforeSetDoc", doc, sel)
     this.ensureOperation()
@@ -144,7 +146,7 @@ export class ProseMirror {
     this.input.maybeAbortComposition()
     this.ranges.transform(mapping)
     this.doc = doc
-    this.sel.setAndSignal(this.sel.map(mapping))
+    this.sel.setAndSignal(this.sel.range.map(doc, mapping))
     this.signal("change")
   }
 
@@ -155,19 +157,23 @@ export class ProseMirror {
 
   setSelection(rangeOrAnchor, head) {
     let range = rangeOrAnchor
-    if (!(range instanceof SelectionRange))
-      range = new SelectionRange(this.doc, rangeOrAnchor, head || rangeOrAnchor)
+    if (!(range instanceof TextSelection))
+      range = new TextSelection(rangeOrAnchor, head)
     this.checkPos(range.head, true)
     this.checkPos(range.anchor, true)
     this.ensureOperation()
     this.input.maybeAbortComposition()
-    if (range.cmp(this.sel.range)) this.sel.setAndSignal(range)
+    if (!range.eq(this.sel.range)) this.sel.setAndSignal(range)
   }
 
   setNodeSelection(pos) {
     this.checkPos(pos, false)
+    let parent = this.doc.path(pos.path)
+    if (pos.offset >= parent.maxOffset)
+      throw new Error("Trying to set a node selection at the end of a node")
+    let node = parent.isTextblock ? parent.childAfter(pos.offset).node : parent.child(pos.offset)
     this.input.maybeAbortComposition()
-    this.sel.setNodeAndSignal(pos)
+    this.sel.set(new NodeSelection(pos, pos.move(1), node))
   }
 
   setNodeSelection(pos) {
@@ -196,18 +202,14 @@ export class ProseMirror {
     if (!op || !document.body.contains(this.wrapper)) return
     this.operation = null
 
-    let docChanged = op.doc != this.doc || this.ranges.dirty.size, redrawn = false
+    let docChanged = op.doc != this.doc || this.dirtyNodes.size, redrawn = false
     if (!this.input.composing && (docChanged || op.composingAtStart)) {
-      if (op.fullRedraw) draw(this, this.doc) // FIXME only redraw target block composition
-      else redraw(this, this.ranges.dirty, this.doc, op.doc)
-      this.ranges.resetDirty()
+      redraw(this, this.dirtyNodes, this.doc, op.doc)
+      this.dirtyNodes.clear()
       redrawn = true
     }
 
-    if ((redrawn ||
-         op.sel.anchor.cmp(this.sel.range.anchor) || op.sel.head.cmp(this.sel.range.head) ||
-         (op.sel.nodePos ? !this.sel.range.nodePos || this.sel.range.nodePos.cmp(op.sel.nodePos) : this.sel.range.nodePos)) &&
-        !this.input.composing)
+    if ((redrawn || !op.sel.eq(this.sel.range)) && !this.input.composing)
       this.sel.toDOM(op.focus)
     if (op.scrollIntoView !== false)
       scrollIntoView(this, op.scrollIntoView)
@@ -242,20 +244,19 @@ export class ProseMirror {
     this.ranges.removeRange(range)
   }
 
-  // FIXME stop requiring marker instance?
-  setStyle(st, to) {
+  setStyle(type, to, attrs) {
     let sel = this.selection
     if (sel.empty) {
       let styles = this.activeStyles()
-      if (to == null) to = !containsStyle(styles, st.type)
-      if (to && !this.doc.path(sel.head.path).type.canContainStyle(st.type)) return
-      this.input.storedStyles = to ? st.addToSet(styles) : removeStyle(styles, st.type)
+      if (to == null) to = !containsStyle(styles, type)
+      if (to && !this.doc.path(sel.head.path).type.canContainStyle(type)) return
+      this.input.storedStyles = to ? type.create(attrs).addToSet(styles) : removeStyle(styles, type)
       this.signal("activeStyleChange")
     } else {
-      if (to != null ? to : !rangeHasStyle(this.doc, sel.from, sel.to, st.type))
-        this.apply(this.tr.addStyle(sel.from, sel.to, st))
+      if (to != null ? to : !rangeHasStyle(this.doc, sel.from, sel.to, type))
+        this.apply(this.tr.addStyle(sel.from, sel.to, type.create(attrs)))
       else
-        this.apply(this.tr.removeStyle(sel.from, sel.to, st.type))
+        this.apply(this.tr.removeStyle(sel.from, sel.to, type))
     }
   }
 
@@ -277,7 +278,7 @@ export class ProseMirror {
   }
 
   posFromDOM(element, offset, textblock) {
-    // FIXME do some input checking
+    if (!this.content.contains(element)) return Pos.start(this.doc)
     let pos = posFromDOM(this, element, offset)
     if (textblock !== false && !this.doc.path(pos.path).isTextblock)
       pos = Pos.near(this.doc, pos)
@@ -320,6 +321,34 @@ export class ProseMirror {
     }
     return this.commandKeys[name] = null
   }
+
+  markRangeDirty(range) {
+    this.ensureOperation()
+    let dirty = this.dirtyNodes
+    let from = range.from, to = range.to
+    for (let depth = 0, node = this.doc;; depth++) {
+      let fromEnd = depth == from.depth, toEnd = depth == to.depth
+      if (!fromEnd && !toEnd && from.path[depth] == to.path[depth]) {
+        let child = node.child(from.path[depth])
+        if (!dirty.has(child)) dirty.set(child, 1)
+        node = child
+      } else {
+        let start = fromEnd ? from.offset : from.path[depth]
+        let end = toEnd ? to.offset : to.path[depth] + 1
+        if (node.isTextblock) {
+          for (let offset = 0, i = 0; offset < end; i++) {
+            let child = node.child(i)
+            offset += child.offset
+            if (offset > start) dirty.set(child, 2)
+          }
+        } else {
+          for (let i = start; i < end; i++)
+            dirty.set(node.child(i), 2)
+        }
+        break
+      }
+    }
+  }
 }
 
 const nullOptions = {}
@@ -333,7 +362,6 @@ class Operation {
     this.selNode = pm.sel.node
     this.scrollIntoView = false
     this.focus = false
-    this.fullRedraw = false
     this.composingAtStart = !!pm.input.composing
   }
 }
@@ -345,11 +373,15 @@ class EditorTransform extends Transform {
   }
 
   clearSelection() {
-    let {empty, from, to, nodePos, node} = this.pm.selection
-    if (nodePos && node.type.contains == null)
-      this.delete(nodePos, nodePos.move(1))
-    else if (!empty)
-      this.delete(from, to)
+    let {empty, from, to, node} = this.pm.selection
+    if (empty) return this
+    if (node && node.type.contains != null) {
+      let path = from.path.concat(from.offset)
+      from = Pos.start(node, path)
+      if (!from) return this
+      to = Pos.end(node, path)
+    }
+    this.delete(from, to)
     return this
   }
 
@@ -360,9 +392,16 @@ class EditorTransform extends Transform {
     return this
   }
 
-  get selHead() { return this.map(this.pm.selection.head).pos }
-  get selFrom() { return this.map(this.pm.selection.from).pos }
-  get selTo() { return this.map(this.pm.selection.to).pos }
+  get selHead() {
+    let head = this.pm.selection.head
+    return head && this.map(head).pos
+  }
+  get selFrom() {
+    return this.map(this.pm.selection.from).pos
+  }
+  get selTo() {
+    return this.map(this.pm.selection.to).pos
+  }
 
   apply(options) {
     return this.pm.apply(this, options)

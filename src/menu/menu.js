@@ -352,19 +352,6 @@ defineParamHandler("tooltip", tooltipParamHandler)
 //   width: fit-content;
 // }
 
-// FIXME check for obsolete styles
-// insertCSS(`
-
-// .ProseMirror-menu {
-//   margin: 0 -4px;
-//   line-height: 1;
-//   white-space: pre;
-// }
-// .ProseMirror-tooltip .ProseMirror-menu {
-//   width: -webkit-fit-content;
-//   width: fit-content;
-// }
-
 // .ProseMirror-tooltip-back-wrapper {
 //   padding-left: 12px;
 // }
@@ -435,7 +422,7 @@ defineParamHandler("tooltip", tooltipParamHandler)
 //   background: #444;
 //   color: white;
 //   padding: 2px 2px;
-//   z-index: 5;
+//   z-index: 15;
 // }
 // .ProseMirror-select-menu div {
 //   cursor: pointer;
@@ -444,6 +431,4 @@ defineParamHandler("tooltip", tooltipParamHandler)
 // .ProseMirror-select-menu div:hover {
 //   background: #777;
 // }
-
-// `)
 
