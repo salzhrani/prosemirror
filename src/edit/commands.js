@@ -37,7 +37,7 @@ export class Command {
     this.params = options.params || []
     this.select = options.select || (() => true)
     this.active = options.active || (() => false)
-    this.info = options.info || {}
+    this.info = options
     this.display = options.display || "icon"
   }
 
@@ -96,14 +96,15 @@ const andScroll = {scrollIntoView: true}
 HardBreak.attachCommand("insertHardBreak", type => ({
   label: "Insert hard break",
   run(pm) {
-    let tr = pm.tr.clearSelection(), head = tr.selHead
-    if (pm.doc.path(head.path).type.isCode)
-      tr.insertText(head, "\n")
+    let {node, from} = pm.selection
+    if (node && node.isBlock)
+      return false
+    else if (pm.doc.path(from.path).type.isCode)
+      return pm.typeText("\n").apply(andScroll)
     else
-      tr.insert(head, pm.schema.node(type))
-    tr.apply(andScroll)
+      return pm.replaceSelection(type.create()).apply(andScroll)
   },
-  info: {key: ["Mod-Enter", "Shift-Enter"]}
+  key: ["Mod-Enter", "Shift-Enter"]
 }))
 
 function inlineStyleActive(pm, type) {
@@ -151,13 +152,17 @@ function generateStyleCommands(type, name, labelName, info) {
     run(pm) { pm.setStyle(type, false) },
     select(pm) { return inlineStyleActive(pm, type) }
   }))
-  type.attachCommand(name, type => ({
-    label: "Toggle " + labelName,
-    run(pm) { pm.setStyle(type, null) },
-    active(pm) { return inlineStyleActive(pm, type) },
-    select(pm) { return inlineStyleApplies(pm, type) },
-    info
-  }))
+  type.attachCommand(name, type => {
+    let command = {
+      label: "Toggle " + labelName,
+      run(pm) { pm.setStyle(type, null) },
+      active(pm) { return inlineStyleActive(pm, type) },
+      select(pm) { return inlineStyleApplies(pm, type) },
+      info
+    }
+    for (let prop in info) command[prop] = info[prop]
+    return command
+  })
 }
 
 generateStyleCommands(StrongStyle, "strong", null, {
@@ -183,7 +188,7 @@ LinkStyle.attachCommand("unlink", type => ({
   run(pm) { pm.setStyle(type, false) },
   select(pm) { return inlineStyleActive(pm, type) },
   active() { return true },
-  info: {menuGroup: "inline", menuRank: 30}
+  menuGroup: "inline", menuRank: 30
 }))
 LinkStyle.attachCommand("link", type => ({
   label: "Add link",
@@ -193,14 +198,13 @@ LinkStyle.attachCommand("link", type => ({
     {name: "Title", type: "text", default: ""}
   ],
   select(pm) { return inlineStyleApplies(pm, type) && !inlineStyleActive(pm, type) },
-  info: {menuGroup: "inline", menuRank: 30}
+  menuGroup: "inline", menuRank: 30
 }))
 
 Image.attachCommand("insertImage", type => ({
   label: "Insert image",
   run(pm, src, alt, title) {
-    let tr = pm.tr.clearSelection()
-    return tr.insertInline(tr.selHead, type.create({src, title, alt})).apply(andScroll)
+    return pm.replaceSelection(type.create({src, title, alt})).apply(andScroll)
   },
   params: [
     {name: "Image URL", type: "text"},
@@ -210,7 +214,13 @@ Image.attachCommand("insertImage", type => ({
   select(pm) {
     return pm.doc.path(pm.selection.from.path).type.canContainType(type)
   },
-  info: {menuGroup: "inline", menuRank: 40}
+  menuGroup: "inline",
+  menuRank: 40,
+  prefillParams(pm) {
+    let {node} = pm.selection
+    if (node && node.type == type)
+      return [node.attrs.src, node.attrs.alt, node.attrs.title]
+  }
 }))
 
 /**
@@ -256,31 +266,10 @@ function moveBackward(parent, offset, by) {
 defineCommand("deleteSelection", {
   label: "Delete the selection",
   run(pm) {
-    let {from, to, node} = pm.selection
-    let deleteBlock = node && node.isBlock
-    if (deleteBlock && (pm.doc.path(from.path).length == 1 ||
-                        !(Pos.before(pm.doc, from) || Pos.after(pm.doc, to)))) {
-      // Can't delete this block without creating an invalid document
-      let path = from.path.concat(from.offset)
-      from = Pos.start(node, path)
-      if (!from) return false
-      to = Pos.end(node, path)
-      deleteBlock = false
-    }
-    if (from.cmp(to) == 0) return false
-    pm.tr.delete(from, to).apply()
-    if (node) {
-      let after = selectableBlockFrom(pm.doc, deleteBlock ? from : from.shorten(), 1)
-      if (!after)
-        pm.setSelection(Pos.before(pm.doc, from))
-      else if (pm.doc.path(after).isTextblock)
-        pm.setSelection(new Pos(after, 0))
-      else
-        pm.setNodeSelection(Pos.from(after))
-    }
+    return pm.replaceSelection().apply(andScroll)
   },
-  info: {key: ["Backspace(10)", "Delete(10)", "Mod-Backspace(10)", "Mod-Delete(10)"],
-         macKey: ["Ctrl-H(10)", "Alt-Backspace(10)", "Ctrl-D(10)", "Ctrl-Alt-Backspace(10)", "Alt-Delete(10)", "Alt-D(10)"]}
+  key: ["Backspace(10)", "Delete(10)", "Mod-Backspace(10)", "Mod-Delete(10)"],
+  macKey: ["Ctrl-H(10)", "Alt-Backspace(10)", "Ctrl-D(10)", "Ctrl-Alt-Backspace(10)", "Alt-Delete(10)", "Alt-D(10)"]
 })
 
 function deleteBarrier(pm, cut) {
@@ -326,7 +315,7 @@ defineCommand("joinBackward", {
     // Apply the joining algorithm
     return deleteBarrier(pm, cut)
   },
-  info: {key: ["Backspace(30)", "Mod-Backspace(30)"]}
+  key: ["Backspace(30)", "Mod-Backspace(30)"]
 })
 
 defineCommand("deleteCharBefore", {
@@ -337,7 +326,8 @@ defineCommand("deleteCharBefore", {
     let from = moveBackward(pm.doc.path(head.path), head.offset, "char")
     return pm.tr.delete(new Pos(head.path, from), head).apply(andScroll)
   },
-  info: {key: "Backspace(60)", macKey: "Ctrl-H(40)"}
+  key: "Backspace(60)",
+  macKey: "Ctrl-H(40)"
 })
 
 defineCommand("deleteWordBefore", {
@@ -348,7 +338,8 @@ defineCommand("deleteWordBefore", {
     let from = moveBackward(pm.doc.path(head.path), head.offset, "word")
     return pm.tr.delete(new Pos(head.path, from), head).apply(andScroll)
   },
-  info: {key: "Mod-Backspace(40)", macKey: "Alt-Backspace(40)"}
+  key: "Mod-Backspace(40)",
+  macKey: "Alt-Backspace(40)"
 })
 
 function moveForward(parent, offset, by) {
@@ -405,7 +396,7 @@ defineCommand("joinForward", {
     // Apply the joining algorithm
     return deleteBarrier(pm, cut)
   },
-  info: {key: ["Delete(30)", "Mod-Delete(30)"]}
+  key: ["Delete(30)", "Mod-Delete(30)"]
 })
 
 defineCommand("deleteCharAfter", {
@@ -416,7 +407,8 @@ defineCommand("deleteCharAfter", {
     let to = moveForward(pm.doc.path(head.path), head.offset, "char")
     return pm.tr.delete(head, new Pos(head.path, to)).apply(andScroll)
   },
-  info: {key: "Delete(60)", macKey: "Ctrl-D(60)"}
+  key: "Delete(60)",
+  macKey: "Ctrl-D(60)"
 })
 
 defineCommand("deleteWordAfter", {
@@ -427,7 +419,8 @@ defineCommand("deleteWordAfter", {
     let to = moveForward(pm.doc.path(head.path), head.offset, "word")
     return pm.tr.delete(head, new Pos(head.path, to)).apply(andScroll)
   },
-  info: {key: "Mod-Delete(40)", macKey: ["Ctrl-Alt-Backspace(40)", "Alt-Delete(40)", "Alt-D(40)"]}
+  key: "Mod-Delete(40)",
+  macKey: ["Ctrl-Alt-Backspace(40)", "Alt-Delete(40)", "Alt-D(40)"]
 })
 
 function joinPointAbove(pm) {
@@ -446,10 +439,8 @@ defineCommand("joinUp", {
     if (node) pm.setNodeSelection(point.move(-1))
   },
   select(pm) { return joinPointAbove(pm) },
-  info: {
-    menuGroup: "block", menuRank: 80,
-    key: "Alt-Up"
-  }
+  menuGroup: "block", menuRank: 80,
+  key: "Alt-Up"
 })
 
 function joinPointBelow(pm) {
@@ -468,7 +459,7 @@ defineCommand("joinDown", {
     if (node) pm.setNodeSelection(point.move(-1))
   },
   select(pm) { return joinPointBelow(pm) },
-  info: {key: "Alt-Down"}
+  key: "Alt-Down"
 })
 
 defineCommand("lift", {
@@ -481,25 +472,26 @@ defineCommand("lift", {
     let {from, to} = pm.selection
     return canLift(pm.doc, from, to)
   },
-  info: {
-    menuGroup: "block", menuRank: 75,
-    key: "Alt-Left"
-  }
+  menuGroup: "block", menuRank: 75,
+  key: "Alt-Left"
 })
 
 function wrapCommand(type, name, labelName, info) {
-  type.attachCommand("wrap" + name, type => ({
-    label: "Wrap in " + labelName,
-    run(pm) {
-      let {from, to} = pm.selection
-      return pm.tr.wrap(from, to, type.create()).apply(andScroll)
-    },
-    select(pm) {
-      let {from, to} = pm.selection
-      return canWrap(pm.doc, from, to, type.create())
-    },
-    info
-  }))
+  type.attachCommand("wrap" + name, type => {
+    let command = {
+      label: "Wrap in " + labelName,
+      run(pm) {
+        let {from, to} = pm.selection
+        return pm.tr.wrap(from, to, type.create()).apply(andScroll)
+      },
+      select(pm) {
+        let {from, to} = pm.selection
+        return canWrap(pm.doc, from, to, type.create())
+      }
+    }
+    for (let key in info) command[key] = info[key]
+    return command
+  })
 }
 
 wrapCommand(BulletList, "BulletList", "bullet list", {
@@ -526,13 +518,24 @@ defineCommand("newlineInCode", {
     let {from, to, node} = pm.selection, block
     if (!node && Pos.samePath(from.path, to.path) &&
         (block = pm.doc.path(from.path)).type.isCode &&
-        to.offset < block.maxOffset) {
-      let tr = pm.tr.clearSelection()
-      return tr.insertText(tr.selHead, "\n").apply(andScroll)
-    }
-    return false
+        to.offset < block.maxOffset)
+      return pm.typeText("\n").apply(andScroll)
+    else
+      return false
   },
-  info: {key: "Enter(10)"}
+  key: "Enter(10)"
+})
+
+defineCommand("createParagraphNear", {
+  label: "Create a paragraph near the selected leaf block",
+  run(pm) {
+    let {from, to, node} = pm.selection
+    if (!node || !node.isBlock || node.type.contains) return false
+    let side = from.offset ? to : from
+    pm.tr.insert(side, pm.schema.defaultTextblockType().create()).apply(andScroll)
+    pm.setSelection(new Pos(side.toPath(), 0))
+  },
+  key: "Enter(20)"
 })
 
 defineCommand("liftEmptyBlock", {
@@ -545,18 +548,22 @@ defineCommand("liftEmptyBlock", {
       return
     return pm.tr.lift(head).apply(andScroll)
   },
-  info: {key: "Enter(30)"}
+  key: "Enter(30)"
 })
 
 defineCommand("splitBlock", {
   label: "Split the current block",
   run(pm) {
     let {from, to, node} = pm.selection, block = pm.doc.path(to.path)
-    if (node && node.isBlock) return false
-    let type = to.offset == block.maxOffset ? pm.schema.defaultTextblockType().create() : null
-    return pm.tr.clearSelection(pm).split(from, 1, type).apply(andScroll)
+    if (node && node.isBlock) {
+      if (!from.offset) return false
+      return pm.tr.split(from).apply(andScroll)
+    } else {
+      let type = to.offset == block.maxOffset ? pm.schema.defaultTextblockType().create() : null
+      return pm.tr.delete(from, to).split(from, 1, type).apply(andScroll)
+    }
   },
-  info: {key: "Enter(60)"}
+  key: "Enter(60)"
 })
 
 function blockTypeCommand(type, name, labelName, attrs, key) {
@@ -574,7 +581,7 @@ function blockTypeCommand(type, name, labelName, attrs, key) {
       else
         return !alreadyHasBlockType(pm.doc, from, to, type, attrs)
     },
-    info: {key}
+    key
   }))
 }
 
@@ -588,45 +595,30 @@ blockTypeCommand(Heading, "makeH6", "heading 6", {level: 6}, "Mod-H '6'")
 blockTypeCommand(Paragraph, "makeParagraph", "paragraph", null, "Mod-P")
 blockTypeCommand(CodeBlock, "makeCodeBlock", "code block", null, "Mod-\\")
 
-function insertOpaqueBlock(pm, type, attrs) {
-  let tr = pm.tr.clearSelection(), head = tr.selHead
-  let parent = tr.doc.path(head.shorten().path)
-  let node = type.create(attrs)
-  if (!parent.type.canContain(node)) return false
-  let off = 0
-  if (head.offset) {
-    tr.split(head)
-    off = 1
-  }
-  return tr.insert(head.shorten(null, off), node).apply(andScroll)
-}
-
 HorizontalRule.attachCommand("insertHorizontalRule", type => ({
   label: "Insert horizontal rule",
-  run(pm) { return insertOpaqueBlock(pm, type) },
-  info: {key: "Mod-Space"}
+  run(pm) {
+    return pm.replaceSelection(type.create()).apply(andScroll)
+  },
+  key: "Mod-Space"
 }))
 
 defineCommand("undo", {
   label: "Undo last change",
   run(pm) { pm.scrollIntoView(); return pm.history.undo() },
   select(pm) { return pm.history.canUndo() },
-  info: {
-    menuGroup: "history",
-    menuRank: 10,
-    key: "Mod-Z"
-  }
+  menuGroup: "history",
+  menuRank: 10,
+  key: "Mod-Z"
 })
 
 defineCommand("redo", {
   label: "Redo last undone change",
   run(pm) { pm.scrollIntoView(); return pm.history.redo() },
   select(pm) { return pm.history.canRedo() },
-  info: {
-    menuGroup: "history",
-    menuRank: 20,
-    key: ["Mod-Y", "Shift-Mod-Z"]
-  }
+  menuGroup: "history",
+  menuRank: 20,
+  key: ["Mod-Y", "Shift-Mod-Z"]
 })
 
 defineCommand("textblockType", {
@@ -643,7 +635,7 @@ defineCommand("textblockType", {
     {name: "Type", type: "select", options: listTextblockTypes, default: currentTextblockType, defaultLabel: "Type..."}
   ],
   display: "select",
-  info: {menuGroup: "block", menuRank: 10}
+  menuGroup: "block", menuRank: 10
 })
 
 Paragraph.prototype.textblockTypes = [{label: "Normal", rank: 10}]
@@ -698,11 +690,9 @@ defineCommand("selectParentBlock", {
   select(pm) {
     return nodeAboveSelection(pm)
   },
-  info: {
-    menuGroup: "block",
-    menuRank: 90,
-    key: "Esc"
-  }
+  menuGroup: "block",
+  menuRank: 90,
+  key: "Esc"
 })
 
 // FIXME we'll need some awareness of bidi motion when determining block start and end
@@ -754,7 +744,7 @@ defineCommand("selectBlockLeft", {
     if (done) pm.scrollIntoView()
     return done
   },
-  info: {key: ["Left", "Mod-Left"]}
+  key: ["Left", "Mod-Left"]
 })
 
 defineCommand("selectBlockRight", {
@@ -764,7 +754,7 @@ defineCommand("selectBlockRight", {
     if (done) pm.scrollIntoView()
     return done
   },
-  info: {key: ["Right", "Mod-Right"]}
+  key: ["Right", "Mod-Right"]
 })
 
 function selectBlockVertically(pm, dir) {
@@ -811,7 +801,7 @@ defineCommand("selectBlockUp", {
     if (done !== false) pm.scrollIntoView()
     return done
   },
-  info: {key: "Up"}
+  key: "Up"
 })
 
 defineCommand("selectBlockDown", {
@@ -821,5 +811,5 @@ defineCommand("selectBlockDown", {
     if (done !== false) pm.scrollIntoView()
     return done
   },
-  info: {key: "Down"}
+  key: "Down"
 })

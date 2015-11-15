@@ -170,18 +170,22 @@ function renderItem(item, menu) {
 }
 
 function buildParamForm(pm, command) {
+  let prefill = command.info.prefillParams && command.info.prefillParams(pm)
   let fields = command.params.map((param, i) => {
     let field, name = "field_" + i
+    let val = prefill ? prefill[i] : param.default || ""
     if (param.type == "text")
       field = elt("input", {name, type: "text",
                             placeholder: param.name,
+                            value: val,
                             autocomplete: "off"})
     else if (param.type == "select")
       field = elt("select", {name}, (param.options.call ? param.options(pm) : param.options)
-                  .map(o => elt("option", {value: o.value, selected: o == param.default}, o.label)))
+                .map(o => elt("option", {value: o.value, selected: o == val}, o.label)))
+                  .map(o => elt("option", {value: o.value, selected: o == param.default}, o.label))
     else if (param.type == "radio")
       field = elt("div", {class: "ProseMirror-radio" + (param.name ? " ProseMirror-radio-" + param.name : '')}, (param.options.call ? param.options(pm) : param.options)
-                  .map(o => elt("label", {'data-for': o.value}, [elt("input", {class: 'ProseMirror-radio-input', type: "radio", value: o.value, checked: o == param.default, name}), o.label || ''])));
+                  .map(o => elt("label", {'data-for': o.value}, [elt("input", {class: 'ProseMirror-radio-input', type: "radio", value: o.value, checked: o == param.default, name}), o.label || ''])))
     else // FIXME more types
       throw new Error("Unsupported parameter type: " + param.type)
     return elt("div", null, field)
@@ -189,7 +193,7 @@ function buildParamForm(pm, command) {
   return elt("form", null, fields)
 }
 
-function gatherParams(command, form, pm) {
+function gatherParams(pm, command, form) {
   let bad = false
   let params = command.params.map((param, i) => {
     let val = form.elements["field_" + i].value
@@ -212,7 +216,7 @@ function paramForm(pm, command, callback) {
 
   let submit = () => {
     // FIXME error messages
-    finish(gatherParams(command, form, pm))
+    finish(gatherParams(pm, command, form))
   }
   form.addEventListener("submit", e => {
     e.preventDefault()
@@ -247,7 +251,7 @@ function radioForm(pm, command, callback) {
 
   let submit = () => {
     // FIXME error messages
-    finish(gatherParams(command, form, pm))
+    finish(gatherParams(pm, command, form))
   }
   form.addEventListener("change", e => {
     e.preventDefault()
