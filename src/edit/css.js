@@ -26,6 +26,7 @@ insertCSS(`
 
 .ProseMirror-content ul, .ProseMirror-content ol {
   padding-left: 30px;
+  cursor: default;
 }
 
 .ProseMirror-content blockquote {
@@ -78,6 +79,9 @@ insertCSS(`
 .ProseMirror-content li {
   position: relative;
   pointer-events: none; /* Don't do weird stuff with marker clicks */
+}
+.ProseMirror-content li > * {
+  pointer-events: auto;
 }
 
 li.ProseMirror-selectednode {

@@ -9,7 +9,6 @@ function test(cmd, before, after) {
   let known = used[cmd] || 0
   defTest("command_" + cmd + (known ? "_" + (known + 1) : ""), () => {
     let pm = tempEditor({doc: before})
-    pm.setSelection(before.tag.a, before.tag.b || before.tag.a)
     pm.execCommand(cmd)
     cmpNode(pm.doc, after)
   })
@@ -236,6 +235,31 @@ test("joinUp",
 test("joinUp",
      doc(ul(li(p("foo")), li(p("<a>bar")))),
      doc(ul(li(p("foo"), p("bar")))))
+test("joinUp",
+     doc(ul(li(p("foo")), li("<a>", p("bar")))),
+     doc(ul(li(p("foo")), li(p("bar")))))
+test("joinUp",
+     doc(ul(li(p("foo")), "<a>", li(p("bar")))),
+     doc(ul(li(p("foo"), p("bar")))))
+
+test("joinDown",
+     doc(blockquote(p("foo<a>")), blockquote(p("bar"))),
+     doc(blockquote(p("foo"), p("<a>bar"))))
+test("joinDown",
+     doc(blockquote(p("foo")), blockquote(p("<a>bar"))),
+     doc(blockquote(p("foo")), blockquote(p("bar"))))
+test("joinDown",
+     doc(ul(li(p("foo<a>"))), ul(li(p("bar")))),
+     doc(ul(li(p("foo")), li(p("bar")))))
+test("joinDown",
+     doc(ul(li(p("<a>foo")), li(p("bar")))),
+     doc(ul(li(p("foo"), p("bar")))))
+test("joinDown",
+     doc(ul(li("<a>", p("foo")), li(p("bar")))),
+     doc(ul(li(p("foo")), li(p("bar")))))
+test("joinDown",
+     doc(ul("<a>", li(p("foo")), li(p("bar")))),
+     doc(ul(li(p("foo"), p("bar")))))
 
 test("lift",
      doc(blockquote(p("<a>foo"))),
@@ -252,6 +276,9 @@ test("lift",
 test("lift",
      doc(blockquote(ul(li(p("foo<a>"))))),
      doc(blockquote(p("foo<a>"))))
+test("lift",
+     doc(blockquote("<a>", ul(li(p("foo"))))),
+     doc(ul(li(p("foo")))))
 
 test("wrapBulletList",
      doc(p("<a>foo")),
@@ -281,6 +308,9 @@ test("wrapBlockQuote",
 test("wrapBlockQuote",
      doc(blockquote(p("fo<a>o"))),
      doc(blockquote(blockquote(p("foo")))))
+test("wrapBlockQuote",
+     doc("<a>", ul(li(p("foo")))),
+     doc(blockquote(ul(li(p("foo"))))))
 
 test("splitBlock",
      doc(p("foo<a>")),
@@ -297,6 +327,12 @@ test("splitBlock",
 test("splitBlock",
      doc(p("fo<a>ob<b>ar")),
      doc(p("fo"), p("ar")))
+test("splitBlock",
+     doc(ol(li(p("a")), "<a>", li(p("b")), li(p("c")))),
+     doc(ol(li(p("a"))), ol(li(p("b")), li(p("c")))))
+test("splitBlock",
+     doc(ol("<a>", li(p("a")), li(p("b")), li(p("c")))),
+     doc(ol(li(p("a")), li(p("b")), li(p("c")))))
 
 test("newlineInCode",
      doc(pre("foo<a>bar")),
@@ -315,6 +351,13 @@ test("liftEmptyBlock",
      doc(ul(li(p("hi")), li(p("<a>")))),
      doc(ul(li(p("hi"))), p()))
 
+test("createParagraphNear",
+     doc("<a>", hr),
+     doc(p(), hr))
+test("createParagraphNear",
+     doc(p(), "<a>", hr),
+     doc(p(), hr, p()))
+
 test("makeH1",
      doc(p("fo<a>o")),
      doc(h1("foo")))
@@ -328,6 +371,9 @@ test("makeParagraph",
 test("makeParagraph",
      doc(h1("fo<a>o", em("bar"))),
      doc(p("foo", em("bar"))))
+test("makeParagraph",
+     doc("<a>", h1("foo")),
+     doc(p("foo")))
 
 test("makeCodeBlock",
      doc(h1("fo<a>o")),
@@ -348,3 +394,9 @@ test("insertHorizontalRule",
 test("insertHorizontalRule",
      doc(p("fo<a>o"), p("b<b>ar")),
      doc(p("fo"), hr, p("ar")))
+test("insertHorizontalRule",
+     doc("<a>", p("foo"), p("bar")),
+     doc(hr, p("bar")))
+test("insertHorizontalRule",
+     doc("<a>", p("bar")),
+     doc(p("bar")))
