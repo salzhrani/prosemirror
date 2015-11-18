@@ -21,18 +21,23 @@ defineStep("ancestor", {
     if (depth == 0 && wrappers.length == 0) return null
 
     let parent = doc.path(toParent), parentSize = parent.length, newParent
+    if (parent.type.locked) return null
     if (wrappers.length) {
       let lastWrapper = wrappers[wrappers.length - 1]
       let content = inner.slice(from.offset, to.offset)
       if (!parent.type.canContain(wrappers[0]) ||
-          !content.every(n => lastWrapper.type.canContain(n)))
+          !content.every(n => lastWrapper.type.canContain(n)) ||
+          !inner.length && !lastWrapper.type.canBeEmpty ||
+          lastWrapper.type.locked)
         return null
       let node = null
       for (let i = wrappers.length - 1; i >= 0; i--)
         node = wrappers[i].copy(node ? [node] : content)
       newParent = parent.splice(start, end, [node])
     } else {
-      if (!parent.type.canContainChildren(inner, true)) return null
+      if (!parent.type.canContainChildren(inner, true) ||
+          !inner.length && start == 0 && end == parent.length && !parent.type.canBeEmpty)
+        return null
       newParent = parent.splice(start, end, inner.children)
     }
     let copy = doc.replaceDeep(toParent, newParent)
@@ -179,21 +184,6 @@ export function alreadyHasBlockType(doc, from, to, type, attrs) {
   return found
 }
 
-function maybeInheritAttrs(node, wrap) {
-  let updated
-  for (let attr in node.type.attrs) {
-    if (node.type.attrs[attr].inheritable && wrap.type.attrs[attr] == node.type.attrs[attr]) {
-      if (!updated) {
-        let attrs = Object.create(null)
-        for (let p in wrap.attrs) attrs[p] = wrap.attrs[p]
-        updated = wrap.type.create(attrs)
-      }
-      updated.attrs[attr] = node.attrs[attr]
-    }
-  }
-  return updated || wrap
-}
-
 Transform.prototype.setBlockType = function(from, to, wrapNode) {
   this.doc.nodesBetween(from, to || from, (node, path) => {
     if (node.isTextblock && !node.sameMarkup(wrapNode)) {
@@ -201,7 +191,7 @@ Transform.prototype.setBlockType = function(from, to, wrapNode) {
       // Ensure all markup that isn't allowed in the new node type is cleared
       this.clearMarkup(new Pos(path, 0), new Pos(path, node.maxOffset), wrapNode.type)
       this.step("ancestor", new Pos(path, 0), new Pos(path, this.doc.path(path).maxOffset),
-                null, {depth: 1, wrappers: [maybeInheritAttrs(node, wrapNode)]})
+                null, {depth: 1, wrappers: [wrapNode]})
       return false
     }
   })

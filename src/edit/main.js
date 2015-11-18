@@ -5,8 +5,9 @@ import sortedInsert from "../util/sortedinsert"
 import {Map} from "../util/map"
 
 import {parseOptions, initOptions, setOption} from "./options"
-import {Selection, TextSelection, NodeSelection, posAtCoords, posFromDOM, coordsAtPos,
-        scrollIntoView, hasFocus} from "./selection"
+import {SelectionState, Selection, TextSelection, NodeSelection,
+        posAtCoords, coordsAtPos, scrollIntoView,
+        findSelectionAtStart, hasFocus} from "./selection"
 import {requestAnimationFrame, elt, browser} from "../dom"
 import {draw, redraw} from "./draw"
 import {Input} from "./input"
@@ -52,7 +53,7 @@ export class ProseMirror {
     this.dirtyNodes = new Map // Maps node object to 1 (re-scan content) or 2 (redraw entirely)
     this.flushScheduled = false
 
-    this.sel = new Selection(this)
+    this.sel = new SelectionState(this)
     this.input = new Input(this)
 
     this.commands = initCommands(this.schema)
@@ -101,7 +102,7 @@ export class ProseMirror {
     if (transform.docs[0] != this.doc && findDiffStart(transform.docs[0], this.doc))
       throw new Error("Applying a transform that does not start with the current document")
 
-    this.updateDoc(transform.doc, transform)
+    this.updateDoc(transform.doc, transform, options.selection)
     this.signal("transform", transform, options)
     if (options.scrollIntoView) this.scrollIntoView()
     return transform
@@ -111,16 +112,6 @@ export class ProseMirror {
    * @return {Transform} A new transform object.
    */
   get tr() { return new EditorTransform(this) }
-
-  replaceSelection(node, inheritStyles) {
-    if (!node) return deleteSelection(this)
-    else if (node.isInline) return replaceSelectionInline(this, node, inheritStyles)
-    else return replaceSelectionBlock(this, node)
-  }
-
-  typeText(text) {
-    return replaceSelectionInline(this, this.schema.text(text), true)
-  }
 
   setContent(value, format) {
     if (format) value = convertFrom(this.schema, value, format)
@@ -140,10 +131,7 @@ export class ProseMirror {
   }
 
   setDoc(doc, sel) {
-    if (!sel) {
-      let start = Pos.start(doc)
-      sel = new TextSelection(start)
-    }
+    if (!sel) sel = findSelectionAtStart(doc)
     this.signal("beforeSetDoc", doc, sel)
     this.ensureOperation()
     this.setDocInner(doc)
@@ -151,12 +139,12 @@ export class ProseMirror {
     this.signal("setDoc", doc, sel)
   }
 
-  updateDoc(doc, mapping) {
+  updateDoc(doc, mapping, selection) {
     this.ensureOperation()
     this.input.maybeAbortComposition()
     this.ranges.transform(mapping)
     this.doc = doc
-    this.sel.setAndSignal(this.sel.range.map(doc, mapping))
+    this.sel.setAndSignal(selection || this.sel.range.map(doc, mapping))
     this.signal("change")
   }
 
@@ -167,10 +155,15 @@ export class ProseMirror {
 
   setSelection(rangeOrAnchor, head) {
     let range = rangeOrAnchor
-    if (!(range instanceof TextSelection))
+    if (!(range instanceof Selection))
       range = new TextSelection(rangeOrAnchor, head)
-    this.checkPos(range.head, true)
-    this.checkPos(range.anchor, true)
+    if (range instanceof TextSelection) {
+      this.checkPos(range.head, true)
+      this.checkPos(range.anchor, true)
+    } else {
+      this.checkPos(range.from, false)
+      this.checkPos(range.to, false)
+    }
     this.ensureOperation()
     this.input.maybeAbortComposition()
     if (!range.eq(this.sel.range)) this.sel.setAndSignal(range)
@@ -292,14 +285,6 @@ export class ProseMirror {
     return posAtCoords(this, coords)
   }
 
-  posFromDOM(element, offset, textblock) {
-    if (!this.content.contains(element)) return Pos.start(this.doc)
-    let pos = posFromDOM(this, element, offset)
-    if (textblock !== false && !this.doc.path(pos.path).isTextblock)
-      pos = Pos.near(this.doc, pos)
-    return pos
-  }
-
   coordsAtPos(pos) {
     this.checkPos(pos)
     return coordsAtPos(this, pos)
@@ -390,67 +375,47 @@ class EditorTransform extends Transform {
   apply(options) {
     return this.pm.apply(this, options)
   }
-}
 
-function replaceSelectionInline(pm, newNode, inheritStyles) {
-  let {empty, from, to, node} = pm.selection, insertPos, tr = pm.tr
-  if (empty) {
-    insertPos = from
-  } else if (!node || node.isInline) {
-    tr.delete(from, to)
-    insertPos = from
-  } else if (insertPos = Pos.start(node, from.toPath())) {
-    tr.delete(insertPos, Pos.end(node, from.toPath()))
-  } else {
-    let para = pm.schema.defaultTextblockType()
-    let parent = pm.doc.path(from.path)
-    if (parent.type.canContainType(para)) {
-      tr.insert(to, para.create())
-      insertPos = new Pos(to.toPath(), 0)
-    } else {
-      return tr
+  get selection() {
+    return this.steps.length ? this.pm.selection.map(this) : this.pm.selection
+  }
+
+  replaceSelection(node, inheritStyles) {
+    let {empty, from, to, node: selNode} = this.selection, parent
+    if (node && node.isInline && inheritStyles !== false) {
+      let styles = empty ? this.pm.input.storedStyles : spanStylesAt(this.doc, from)
+      node = node.type.create(node.attrs, node.text, styles)
     }
-  }
-  if (inheritStyles !== false) {
-    let styles = empty ? pm.input.storedStyles : spanStylesAt(tr.doc, insertPos)
-    newNode = newNode.type.create(newNode.attrs, newNode.text, styles)
-  }
-  return tr.insert(insertPos, newNode)
-}
 
-function replaceSelectionBlock(pm, newNode) {
-  let {node, from, to} = pm.selection, tr = pm.tr
-  if (node && node.isBlock) {
-    let parent = tr.doc.path(from.path)
-    if (parent.type.canContain(newNode) &&
-        (Pos.start(newNode) || Pos.before(pm.doc, from) || Pos.after(pm.doc, to)))
-      return tr.replaceWith(from, to, newNode)
-    else
-      return tr
+    if (selNode && selNode.isTextblock && node && node.isInline) {
+      // Putting inline stuff onto a selected textblock puts it inside
+      from = new Pos(from.toPath(), 0)
+      to = new Pos(from.path, selNode.maxOffset)
+    } else if (selNode) {
+      // This node can not simply be removed/replaced. Remove its parent as well
+      while (from.depth && from.offset == 0 && (parent = this.doc.path(from.path)) &&
+             from.offset == parent.maxOffset - 1 &&
+             !parent.type.canBeEmpty && !(node && parent.type.canContain(node))) {
+        from = from.shorten()
+        to = to.shorten(null, 1)
+      }
+    } else if (node && node.isBlock && this.doc.path(from.path.slice(0, from.depth - 1)).type.canContain(node)) {
+      // Inserting a block node into a textblock. Try to insert it above by splitting the textblock
+      this.delete(from, to)
+      let parent = this.doc.path(from.path)
+      if (from.offset && from.offset != parent.maxOffset) this.split(from)
+      return this.insert(from.shorten(null, from.offset ? 1 : 0), node)
+    }
+
+    if (node) return this.replaceWith(from, to, node)
+    else return this.delete(from, to)
   }
 
-  let parent = tr.doc.path(from.path.slice(0, from.path.length - 1))
-  if (!parent.type.canContain(newNode)) return this
-
-  tr.delete(from, to)
-  let newFrom = tr.map(from).pos
-  let newParent = tr.doc.path(newFrom.path)
-  if (newFrom.offset && newFrom.offset != newParent.maxOffset)
-    tr.split(newFrom)
-  return tr.insert(newFrom.shorten(null, newFrom.offset ? 1 : 0), newNode)
-}
-
-function deleteSelection(pm) {
-  let {from, to, node} = pm.selection
-  let deleteBlock = node && node.isBlock
-  if (deleteBlock && (pm.doc.path(from.path).length == 1 ||
-                      !(Pos.before(pm.doc, from) || Pos.after(pm.doc, to)))) {
-    // Can't delete this block without creating an invalid document
-    let path = from.toPath()
-    from = Pos.start(node, path)
-    if (!from) return false
-    to = Pos.end(node, path)
-    deleteBlock = false
+  deleteSelection() {
+    return this.replaceSelection()
   }
-  return pm.tr.delete(from, to)
+
+  typeText(text) {
+    return this.replaceSelection(this.pm.schema.text(text), true)
+  }
 }

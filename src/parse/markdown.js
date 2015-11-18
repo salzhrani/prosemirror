@@ -2,7 +2,7 @@ import markdownit from "markdown-it"
 import {BlockQuote, OrderedList, BulletList, ListItem,
         HorizontalRule, Paragraph, Heading, CodeBlock, Image, HardBreak,
         EmStyle, StrongStyle, LinkStyle, CodeStyle,
-        Pos, removeStyle} from "../model"
+        removeStyle} from "../model"
 import {defineSource} from "./index"
 
 export function fromMarkdown(schema, text) {
@@ -10,7 +10,6 @@ export function fromMarkdown(schema, text) {
   let state = new State(schema, tokens), doc
   state.parseTokens(tokens)
   do { doc = state.closeNode() } while (state.stack.length)
-  if (!Pos.start(doc)) doc = doc.splice(0, 0, [schema.defaultTextblockType().create()])
   return doc
 }
 
@@ -65,7 +64,7 @@ class State {
   }
 
   addNode(type, attrs, content) {
-    let node = type.create(attrs, content)
+    let node = type.createAutoFill(attrs, content)
     this.push(node)
     return node
   }
