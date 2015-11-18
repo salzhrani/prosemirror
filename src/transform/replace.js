@@ -1,4 +1,4 @@
-import {Pos, spanStylesAt, sliceBefore, sliceAfter, sliceBetween} from "../model"
+import {Pos, spanStylesAt, sliceBefore, sliceAfter, sliceBetween, childrenBetween} from "../model"
 
 import {TransformResult, Transform} from "./transform"
 import {defineStep, Step} from "./step"
@@ -33,10 +33,12 @@ export function replace(node, from, to, root, repl, depth = 0) {
     let after = sliceAfter(node, to, depth), result
     if (!repl.nodes.every(n => before.type.canContain(n))) return null
     if (repl.nodes.length)
-      result = before.append(repl.nodes, Math.min(repl.openLeft, from.depth - depth))
-                     .append(after.children, Math.min(repl.openRight, to.depth - depth))
+      result = before.append(repl.nodes, from.depth - depth, repl.openLeft)
+                     .append(after.children, repl.openRight, to.depth - depth)
     else
-      result = before.append(after.children, Math.min(to.depth, from.depth) - depth)
+      result = before.append(after.children, from.depth - depth, to.depth - depth)
+    if (!result.length && !result.type.canBeEmpty)
+      result = result.copy(result.type.defaultContent())
     return {doc: result, moved: findMovedChunks(node, to, result, depth)}
   } else {
     let pos = root[depth]
@@ -66,10 +68,8 @@ defineStep("replace", {
   },
   invert(step, oldDoc, map) {
     let depth = step.pos.depth
-    let between = sliceBetween(oldDoc, step.from, step.to, false)
-    for (let i = 0; i < depth; i++) between = between.firstChild
     return new Step("replace", step.from, map.map(step.to).pos, step.from.shorten(depth), {
-      nodes: between.children,
+      nodes: childrenBetween(oldDoc.path(step.pos.path), step.from, step.to, depth),
       openLeft: step.from.depth - depth,
       openRight: step.to.depth - depth
     })
@@ -217,9 +217,20 @@ Transform.prototype.replace = function(from, to, source, start, end) {
   } else {
     nodesBefore = doc.path(root.path).pathNodes(from.path.slice(depth)).slice(1)
   }
-  if (nodesAfter.length != nodesBefore.length ||
-      !nodesAfter.every((n, i) => n.sameMarkup(nodesBefore[i]))) {
-    let before = Pos.before(docAfter, after.shorten(null, 0))
+
+  if (nodesBefore.length &&
+      (nodesAfter.length != nodesBefore.length ||
+       !nodesAfter.every((n, i) => n.sameMarkup(nodesBefore[i])))) {
+    let {path, offset} = after.shorten(root.depth), before
+    for (let node = docAfter.path(path), i = 0;; i++) {
+      if (i == nodesBefore.length) {
+        before = new Pos(path, offset)
+        break
+      }
+      path.push(offset - 1)
+      node = node.child(offset - 1)
+      offset = node.maxOffset
+    }
     moveText(this, docAfter, before, after)
   }
   return this

@@ -9,14 +9,17 @@ defineStep("split", {
     let pos = step.pos
     if (pos.depth == 0) return null
 
-    let last = pos.depth - 1, parentPath = pos.path.slice(0, last)
-    let offset = pos.path[last], parent = doc.path(parentPath)
+    let {path: parentPath, offset} = pos.shorten()
+    let parent = doc.path(parentPath)
     let target = parent.child(offset), targetSize = target.maxOffset
 
     let splitAt = pos.offset
+    if ((splitAt == 0 && !target.type.canBeEmpty) || target.type.locked ||
+        (splitAt == target.maxOffset) && !(step.param || target).type.canBeEmpty)
+      return null
     let newParent = parent.splice(offset, offset + 1,
                                   [target.copy(target.slice(0, splitAt)),
-                                   (step.param || target).copy(target.slice(splitAt), true)])
+                                   (step.param || target).copy(target.slice(splitAt))])
     let copy = doc.replaceDeep(parentPath, newParent)
 
     let dest = new Pos(parentPath.concat(offset + 1), 0)

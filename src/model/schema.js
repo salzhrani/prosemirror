@@ -39,15 +39,10 @@ export class NodeType {
     this.attrs = attrs
     this.schema = schema
     this.defaultAttrs = null
-    this.mustRecompute = false
-    for (let attr in attrs)
-      if (attrs[attr].mustRecompute) this.mustRecompute = true
   }
 
-  get configurable() { return true }
+  get locked() { return false }
   get isTextblock() { return false }
-  get isBlock() { return false }
-  get isInline() { return false }
 
   get selectable() { return true }
 
@@ -66,16 +61,6 @@ export class NodeType {
     for (let i = 0; i < node.length; i++)
       if (!this.canContain(node.child(i))) return false
     return true
-  }
-
-  recomputeAttrs(attrs, content) {
-    if (!this.mustRecompute) return attrs
-    let copy = Object.create(null)
-    for (let attr in attrs) {
-      let desc = this.attrs[attr]
-      copy[attr] = desc.mustRecompute ? desc.compute(this, content) : attrs[attr]
-    }
-    return copy
   }
 
   findConnection(other) {
@@ -105,6 +90,14 @@ export class NodeType {
   create(attrs, content, styles) {
     return new this.instance(this, this.buildAttrs(attrs, content), content, styles)
   }
+
+  createAutoFill(attrs, content, styles) {
+    if ((!content || content.length == 0) && !this.canBeEmpty)
+      content = this.defaultContent()
+    return this.create(attrs, content, styles)
+  }
+
+  get canBeEmpty() { return true }
 
   static compile(types, schema) {
     let result = Object.create(null)
@@ -139,6 +132,16 @@ export class Block extends NodeType {
   static get contains() { return "block" }
   static get kind() { return "block." }
   get isBlock() { return true }
+
+  get canBeEmpty() { return this.contains == null }
+
+  defaultContent() {
+    let inner = this.schema.defaultTextblockType().create()
+    let conn = this.findConnection(inner.type)
+    if (!conn) SchemaError.raise("Can't create default content for " + this.name)
+    for (let i = conn.length - 1; i >= 0; i--) inner = conn[i].create(null, [inner])
+    return [inner]
+  }
 }
 
 export class Textblock extends Block {
@@ -158,13 +161,14 @@ export class Textblock extends Block {
       if (contains[i] == type.name) return true
     return false
   }
+
+  get canBeEmpty() { return true }
 }
 
 export class Inline extends NodeType {
   get instance() { return InlineNode }
   static get contains() { return null }
   static get kind() { return "inline." }
-  get isInline() { return true }
 }
 
 export class Text extends Inline {
@@ -178,8 +182,6 @@ export class Attribute {
   constructor(options = {}) {
     this.default = options.default
     this.compute = options.compute
-    this.mustRecompute = options.mustRecompute
-    this.inheritable = options.inheritable
   }
 }
 

@@ -7,7 +7,7 @@ import sortedInsert from "../util/sortedinsert"
 
 import {charCategory, isExtendingChar} from "./char"
 import {Keymap} from "./keys"
-import {selectableBlockFrom, verticalMotionLeavesTextblock, setDOMSelectionToPos} from "./selection"
+import {findSelectionFrom, verticalMotionLeavesTextblock, setDOMSelectionToPos, NodeSelection} from "./selection"
 
 const globalCommands = Object.create(null)
 const paramHandlers = Object.create(null)
@@ -99,9 +99,9 @@ HardBreak.attachCommand("insertHardBreak", type => ({
     if (node && node.isBlock)
       return false
     else if (pm.doc.path(from.path).type.isCode)
-      return pm.typeText("\n").apply(andScroll)
+      return pm.tr.typeText("\n").apply(andScroll)
     else
-      return pm.replaceSelection(type.create()).apply(andScroll)
+      return pm.tr.replaceSelection(type.create()).apply(andScroll)
   },
   key: ["Mod-Enter", "Shift-Enter"]
 }))
@@ -203,7 +203,7 @@ LinkStyle.attachCommand("link", type => ({
 Image.attachCommand("insertImage", type => ({
   label: "Insert image",
   run(pm, src, alt, title) {
-    return pm.replaceSelection(type.create({src, title, alt})).apply(andScroll)
+    return pm.tr.replaceSelection(type.create({src, title, alt})).apply(andScroll)
   },
   params: [
     {name: "Image URL", type: "text"},
@@ -265,7 +265,7 @@ function moveBackward(parent, offset, by) {
 defineCommand("deleteSelection", {
   label: "Delete the selection",
   run(pm) {
-    return pm.replaceSelection().apply(andScroll)
+    return pm.tr.replaceSelection().apply(andScroll)
   },
   key: ["Backspace(10)", "Delete(10)", "Mod-Backspace(10)", "Mod-Delete(10)"],
   macKey: ["Ctrl-H(10)", "Alt-Backspace(10)", "Ctrl-D(10)", "Ctrl-Alt-Backspace(10)", "Alt-Delete(10)", "Alt-D(10)"]
@@ -286,8 +286,8 @@ function deleteBarrier(pm, cut) {
     if (tr.apply(andScroll) !== false) return
   }
 
-  let inner = Pos.after(pm.doc, cut)
-  return !inner ? false : pm.tr.lift(inner).apply(andScroll)
+  let selAfter = findSelectionFrom(pm.doc, cut, 1)
+  return pm.tr.lift(selAfter.from, selAfter.to).apply(andScroll)
 }
 
 defineCommand("joinBackward", {
@@ -518,7 +518,7 @@ defineCommand("newlineInCode", {
     if (!node && Pos.samePath(from.path, to.path) &&
         (block = pm.doc.path(from.path)).type.isCode &&
         to.offset < block.maxOffset)
-      return pm.typeText("\n").apply(andScroll)
+      return pm.tr.typeText("\n").apply(andScroll)
     else
       return false
   },
@@ -597,7 +597,7 @@ blockTypeCommand(CodeBlock, "makeCodeBlock", "code block", null, "Mod-\\")
 HorizontalRule.attachCommand("insertHorizontalRule", type => ({
   label: "Insert horizontal rule",
   run(pm) {
-    return pm.replaceSelection(type.create()).apply(andScroll)
+    return pm.tr.replaceSelection(type.create()).apply(andScroll)
   },
   key: "Mod-Space"
 }))
@@ -694,12 +694,10 @@ defineCommand("selectParentBlock", {
   key: "Esc"
 })
 
-// FIXME we'll need some awareness of bidi motion when determining block start and end
-
-function selectableBlockFromSelection(pm, dir) {
+function moveSelectionBlock(pm, dir) {
   let {from, to, node} = pm.selection
-  let pos = node && node.isBlock ? (dir > 0 ? to : from) : from.shorten(null, dir > 0 ? 1 : 0)
-  return selectableBlockFrom(pm.doc, pos, dir)
+  let side = dir > 0 ? to : from
+  return findSelectionFrom(pm.doc, node && node.isBlock ? side : side.shorten(null, dir > 0 ? 1 : 0), dir)
 }
 
 function selectBlockHorizontally(pm, dir) {
@@ -723,14 +721,9 @@ function selectBlockHorizontally(pm, dir) {
     return false
   }
 
-  let nextBlock = selectableBlockFromSelection(pm, dir)
-  if (!nextBlock) return false
-  let nextNode = pm.doc.path(nextBlock)
-  if (!nextNode.isTextblock) {
-    pm.setNodeSelection(Pos.from(nextBlock))
-    return true
-  } else if (node) {
-    pm.setSelection(new Pos(nextBlock, dir < 0 ? nextNode.maxOffset : 0))
+  let next = moveSelectionBlock(pm, dir)
+  if (next && (next instanceof NodeSelection || node)) {
+    pm.setSelection(next)
     return true
   }
   return false
@@ -765,9 +758,9 @@ function selectBlockVertically(pm, dir) {
     leavingTextblock = verticalMotionLeavesTextblock(pm, dir > 0 ? to : from, dir)
 
   if (leavingTextblock) {
-    let next = selectableBlockFromSelection(pm, dir)
-    if (next && !pm.doc.path(next).isTextblock) {
-      pm.setNodeSelection(Pos.from(next))
+    let next = moveSelectionBlock(pm, dir)
+    if (next && (next instanceof NodeSelection)) {
+      pm.setSelection(next)
       if (!node) pm.sel.lastNonNodePos = from
       return true
     }
@@ -781,15 +774,12 @@ function selectBlockVertically(pm, dir) {
   }
 
   let last = pm.sel.lastNonNodePos
-  if (last) {
-    let beyond = dir < 0 ? Pos.after(pm.doc, to) : Pos.before(pm.doc, from)
-    if (beyond && Pos.samePath(last.path, beyond.path)) {
-      setDOMSelectionToPos(pm, last)
-      return false
-    }
+  let beyond = findSelectionFrom(pm.doc, dir < 0 ? from : to, dir)
+  if (last && beyond && Pos.samePath(last.path, beyond.from.path)) {
+    setDOMSelectionToPos(pm, last)
+    return false
   }
-
-  pm.setSelection(Pos.near(pm.doc, dir < 0 ? from : to, dir))
+  pm.setSelection(beyond)
   return true
 }
 

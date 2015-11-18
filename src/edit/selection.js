@@ -2,12 +2,11 @@ import {Pos} from "../model"
 
 import {contains, browser} from "../dom"
 
-export class Selection {
+export class SelectionState {
   constructor(pm) {
     this.pm = pm
 
-    let start = Pos.start(pm.doc)
-    this.range = new TextSelection(start)
+    this.range = findSelectionAtStart(pm.doc)
     this.lastNonNodePos = null
 
     this.pollState = null
@@ -25,7 +24,7 @@ export class Selection {
 
   set(range, clearLast) {
     this.range = range
-    if (!range.nodePos) this.lastNonNodePos = null
+    if (!range.node) this.lastNonNodePos = null
     if (clearLast !== false) this.lastAnchorNode = null
   }
 
@@ -71,11 +70,11 @@ export class Selection {
     let sel = getSelection(), doc = this.pm.doc
     let anchor = posFromDOMInner(this.pm, sel.anchorNode, sel.anchorOffset)
     let head = posFromDOMInner(this.pm, sel.focusNode, sel.focusOffset)
-    let prevAnchor = this.range.anchor, prevHead = this.range.head
-    let newHead = Pos.near(doc, anchor, prevAnchor && anchor.cmp(prevAnchor))
-    let newAnchor = Pos.near(doc, head, prevHead && head.cmp(prevHead))
-    this.setAndSignal(new TextSelection(newAnchor, newHead))
-    if (newHead.cmp(head) || newAnchor.cmp(anchor)) {
+    let newSel = findSelectionNear(doc, head, this.range.head && this.range.head.cmp(head) < 0 ? -1 : 1)
+    if (newSel instanceof TextSelection && doc.path(anchor.path).isTextblock)
+      newSel = new TextSelection(anchor, newSel.head)
+    this.setAndSignal(newSel)
+    if (newSel instanceof NodeSelection || newSel.head.cmp(head) || newSel.anchor.cmp(anchor)) {
       this.toDOM()
     } else {
       this.clearNode()
@@ -189,8 +188,11 @@ function windowRect() {
           top: 0, bottom: window.innerHeight}
 }
 
-export class NodeSelection {
+export class Selection {}
+
+export class NodeSelection extends Selection {
   constructor(from, to, node) {
+    super()
     this.from = from
     this.to = to
     this.node = node
@@ -211,13 +213,7 @@ export class NodeSelection {
       if (node.type.selectable)
         return new NodeSelection(from, to, node)
     }
-    if (doc.path(from.path).isTextblock)
-      return new TextSelection(from)
-    let path = selectableBlockFrom(doc, from, 1), node
-    if (path && !(node = doc.path(path)).isTextblock)
-      return new NodeSelection(from = Pos.from(path), from.move(1), node)
-    else
-      return new TextSelection(path ? new Pos(path, 0) : Pos.before(doc, from))
+    return findSelectionNear(doc, from)
   }
 }
 
@@ -227,8 +223,9 @@ export class NodeSelection {
  * A range consists of a head (the active location of the cursor)
  * and an anchor (the start location of the selection).
  */
-export class TextSelection {
+export class TextSelection extends Selection {
   constructor(anchor, head) {
+    super()
     this.anchor = anchor
     this.head = head || anchor
   }
@@ -244,16 +241,10 @@ export class TextSelection {
 
   map(doc, mapping) {
     let head = mapping.map(this.head).pos
-    if (!doc.path(head.path).isTextblock) {
-      let path = selectableBlockFrom(doc, head, 1), node
-      if (!path)
-        head = Pos.before(doc, head)
-      else if ((node = doc.path(path)).isTextblock)
-        head = new Pos(path, 0)
-      else
-        return new NodeSelection(head = Pos.from(path), head.move(1), node)
-    }
-    return new TextSelection(head, Pos.near(doc, mapping.map(this.anchor).pos, 1))
+    if (!doc.path(head.path).isTextblock)
+      return findSelectionNear(doc, head)
+    let anchor = mapping.map(this.anchor).pos
+    return new TextSelection(doc.path(anchor.path).isTextblock ? anchor : head, head)
   }
 }
 
@@ -418,9 +409,10 @@ export function hasFocus(pm) {
  * @return {Pos}
  */
 // FIXME fails on the space between lines
+// FIXME reformulate as selectionAtCoords? So that it can't return null
 export function posAtCoords(pm, coords) {
   let element = document.elementFromPoint(coords.left, coords.top + 1)
-  if (!contains(pm.content, element)) return Pos.start(pm.doc)
+  if (!contains(pm.content, element)) return null
 
   let offset
   if (element.childNodes.length == 1 && element.firstChild.nodeType == 3) {
@@ -541,25 +533,44 @@ function offsetInElement(element, coords) {
   return offsetInRects(coords, rects)
 }
 
-function selectableBlockIn(doc, pos, dir) {
-  let node = doc.path(pos.path)
-  for (let offset = pos.offset + (dir > 0 ? 0 : -1); dir > 0 ? offset < node.maxOffset : offset >= 0; offset += dir) {
-    let child = node.child(offset)
-    if (child.isTextblock || (child.type.selectable && child.type.contains == null))
-      return pos.path.concat(offset)
+function findSelectionIn(doc, path, offset, dir, text) {
+  let node = doc.path(path)
+  if (node.isTextblock) return new TextSelection(new Pos(path, offset))
 
-    let inside = selectableBlockIn(doc, new Pos(pos.path.concat(offset), dir < 0 ? child.maxOffset : 0), dir)
+  for (let i = offset + (dir > 0 ? 0 : -1); dir > 0 ? i < node.maxOffset : i >= 0; i += dir) {
+    let child = node.child(i)
+    if (!text && child.type.contains == null && child.type.selectable)
+      return new NodeSelection(new Pos(path, i), new Pos(path, i + 1), child)
+    path.push(i)
+    let inside = findSelectionIn(doc, path, dir < 0 ? child.maxOffset : 0, dir, text)
     if (inside) return inside
+    path.pop()
   }
 }
 
-export function selectableBlockFrom(doc, pos, dir) {
-  for (;;) {
-    let found = selectableBlockIn(doc, pos, dir)
+// FIXME we'll need some awareness of bidi motion when determining block start and end
+
+export function findSelectionFrom(doc, pos, dir, text) {
+  for (let path = pos.path.slice(), offset = pos.offset;;) {
+    let found = findSelectionIn(doc, path, offset, dir, text)
     if (found) return found
-    if (pos.depth == 0) break
-    pos = pos.shorten(null, dir > 0 ? 1 : 0)
+    if (!path.length) break
+    offset = path.pop() + (dir > 0 ? 1 : 0)
   }
+}
+
+export function findSelectionNear(doc, pos, bias = 1, text) {
+  let result = findSelectionFrom(doc, pos, bias, text) || findSelectionFrom(doc, pos, -bias, text)
+  if (!result) throw new Error("Searching for selection in invalid document " + doc)
+  return result
+}
+
+export function findSelectionAtStart(node, path = [], text) {
+  return findSelectionIn(node, path.slice(), 0, 1, text)
+}
+
+export function findSelectionAtEnd(node, path = [], text) {
+  return findSelectionIn(node, path.slice(), node.maxOffset, -1, text)
 }
 
 export function selectableNodeAbove(pm, dom, coords, liberal) {
