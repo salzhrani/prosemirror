@@ -193,10 +193,24 @@ function buildParamForm(pm, command) {
   return elt("form", null, fields)
 }
 
+function getValue(collection) {
+  if (collection.value) {
+    return collection.value;
+  }
+  if (collection.length) {
+    for (let i = 0, l = collection.length; i < l; i++) {
+      if (collection[i].checked) {
+        return collection[i].value;
+      }
+    }
+  }
+  return null;
+}
+
 function gatherParams(pm, command, form) {
   let bad = false
   let params = command.params.map((param, i) => {
-    let val = form.elements["field_" + i].value
+    let val = getValue(form.elements["field_" + i]);
     if (val) return val
     if (param.default == null) bad = true
     else return param.default.call ? param.default(pm) : param.default
