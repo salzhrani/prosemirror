@@ -38,9 +38,7 @@ export class Input {
 
     this.storedStyles = null
     this.eventHandlers = {};
-    this.dropTarget = pm.wrapper.appendChild(elt("div", {class: "ProseMirror-drop-target"}))
-
-    this.dropTarget = pm.wrapper.appendChild(elt("div", {class: "ProseMirror-drop-target"}))
+    // this.dropTarget = pm.wrapper.appendChild(elt("div", {class: "ProseMirror-drop-target"}))
 
     for (let event in handlers) {
       let handler = handlers[event]
@@ -350,62 +348,62 @@ handlers.paste = (pm, e) => {
   }
 }
 
-handlers.dragstart = (pm, e) => {
-  if (!e.dataTransfer) return
+// handlers.dragstart = (pm, e) => {
+//   if (!e.dataTransfer) return
 
-  let fragment = pm.selectedDoc
+//   let fragment = pm.selectedDoc
 
-  e.dataTransfer.setData("text/html", toHTML(fragment))
-  e.dataTransfer.setData("text/plain", toText(fragment))
-  pm.input.draggingFrom = true
-}
+//   e.dataTransfer.setData("text/html", toHTML(fragment))
+//   e.dataTransfer.setData("text/plain", toText(fragment))
+//   pm.input.draggingFrom = true
+// }
 
-handlers.dragend = pm => window.setTimeout(() => pm.input.dragginFrom = false, 50)
+// handlers.dragend = pm => window.setTimeout(() => pm.input.dragginFrom = false, 50)
 
-handlers.dragover = handlers.dragenter = (pm, e) => {
-  e.preventDefault()
-  let cursorPos = pm.posAtCoords({left: e.clientX, top: e.clientY})
-  if (!cursorPos) return
-  let coords = coordsAtPos(pm, cursorPos)
-  let rect = pm.wrapper.getBoundingClientRect()
-  coords.top -= rect.top
-  coords.right -= rect.left
-  coords.bottom -= rect.top
-  coords.left -= rect.left
-  let target = pm.input.dropTarget
-  target.style.display = "block"
-  target.style.left = (coords.left - 1) + "px"
-  target.style.top = coords.top + "px"
-  target.style.height = (coords.bottom - coords.top) + "px"
-}
+// handlers.dragover = handlers.dragenter = (pm, e) => {
+//   e.preventDefault()
+//   let cursorPos = pm.posAtCoords({left: e.clientX, top: e.clientY})
+//   if (!cursorPos) return
+//   let coords = coordsAtPos(pm, cursorPos)
+//   let rect = pm.wrapper.getBoundingClientRect()
+//   coords.top -= rect.top
+//   coords.right -= rect.left
+//   coords.bottom -= rect.top
+//   coords.left -= rect.left
+//   let target = pm.input.dropTarget
+//   target.style.display = "block"
+//   target.style.left = (coords.left - 1) + "px"
+//   target.style.top = coords.top + "px"
+//   target.style.height = (coords.bottom - coords.top) + "px"
+// }
 
-handlers.dragleave = pm => pm.input.dropTarget.style.display = ""
+// handlers.dragleave = pm => pm.input.dropTarget.style.display = ""
 
-handlers.drop = (pm, e) => {
-  pm.input.dropTarget.style.display = ""
+// handlers.drop = (pm, e) => {
+//   pm.input.dropTarget.style.display = ""
 
-  if (!e.dataTransfer) return
+//   if (!e.dataTransfer) return
 
-  let html, txt, doc
-  if (html = e.dataTransfer.getData("text/html"))
-    doc = fromHTML(pm.schema, html, {document})
-  else if (txt = e.dataTransfer.getData("text/plain"))
-    doc = convertFrom(pm.schema, txt, knownSource("markdown") ? "markdown" : "text")
+//   let html, txt, doc
+//   if (html = e.dataTransfer.getData("text/html"))
+//     doc = fromHTML(pm.schema, html, {document})
+//   else if (txt = e.dataTransfer.getData("text/plain"))
+//     doc = convertFrom(pm.schema, txt, knownSource("markdown") ? "markdown" : "text")
 
-  if (doc) {
-    e.preventDefault()
-    let insertPos = pm.posAtCoords({left: e.clientX, top: e.clientY})
-    if (!insertPos) return
-    let tr = pm.tr
-    if (pm.input.draggingFrom && !e.ctrlKey) {
-      tr.deleteSelection()
-      insertPos = tr.map(insertPos).pos
-    }
-    tr.replace(insertPos, insertPos, doc, docSide(doc, "start"), docSide(doc, "end")).apply()
-    pm.setSelection(insertPos, tr.map(insertPos).pos)
-    pm.focus()
-  }
-}
+//   if (doc) {
+//     e.preventDefault()
+//     let insertPos = pm.posAtCoords({left: e.clientX, top: e.clientY})
+//     if (!insertPos) return
+//     let tr = pm.tr
+//     if (pm.input.draggingFrom && !e.ctrlKey) {
+//       tr.deleteSelection()
+//       insertPos = tr.map(insertPos).pos
+//     }
+//     tr.replace(insertPos, insertPos, doc, docSide(doc, "start"), docSide(doc, "end")).apply()
+//     pm.setSelection(insertPos, tr.map(insertPos).pos)
+//     pm.focus()
+//   }
+// }
 
 handlers.focus = pm => {
   addClass(pm.wrapper, "ProseMirror-focused")
