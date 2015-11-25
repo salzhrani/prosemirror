@@ -48,6 +48,8 @@ export class ProseMirror {
     draw(this, this.doc)
     this.content.contentEditable = true
     this.content.style.whiteSpace = 'pre-wrap'
+    if (opts.label)
+      this.content.setAttribute('aria-label', opts.label)
     this.mod = Object.create(null)
     this.operation = null
     this.dirtyNodes = new Map // Maps node object to 1 (re-scan content) or 2 (redraw entirely)

@@ -2,6 +2,7 @@ import {Text, BlockQuote, OrderedList, BulletList, ListItem,
         HorizontalRule, Paragraph, Heading, CodeBlock, Image, HardBreak,
         EmStyle, StrongStyle, LinkStyle, CodeStyle, Pos} from "../model"
 import {defineTarget} from "./index"
+import {elt} from "../dom"
 
 let doc = null
 
@@ -25,17 +26,8 @@ defineTarget("html", toHTML)
 export function renderNodeToDOM(node, options, offset) {
   let dom = renderNode(node, options, offset)
   if (options.renderInlineFlat && node.isInline) {
-    dom = wrapInlineFlat(node, dom)
+    dom = wrapInlineFlat(node, dom, options)
     dom = options.renderInlineFlat(node, dom, offset) || dom
-  }
-  return dom
-}
-
-function elt(name, ...children) {
-  let dom = doc.createElement(name)
-  for (let i = 0; i < children.length; i++) {
-    let child = children[i]
-    dom.appendChild(typeof child == "string" ? doc.createTextNode(child) : child)
   }
   return dom
 }
@@ -63,6 +55,10 @@ function renderNodes(nodes, options) {
 
 function renderNode(node, options, offset) {
   let dom = node.type.serializeDOM(node, options)
+  for (let attr in node.type.attrs) {
+    let desc = node.type.attrs[attr]
+    if (desc.serializeDOM) desc.serializeDOM(dom, node.attrs[attr], options, node)
+  }
   if (options.onRender && node.isBlock)
     dom = options.onRender(node, dom, offset) || dom
   return dom
@@ -91,16 +87,25 @@ function renderInlineContent(nodes, where, options) {
     while (active.length < styles.length) {
       let add = styles[active.length]
       active.push(add)
-      top = top.appendChild(add.type.serializeDOM(add))
+      top = top.appendChild(renderStyle(add, options))
     }
     top.appendChild(renderNode(node, options, i))
   }
 }
 
-function wrapInlineFlat(node, dom) {
+function renderStyle(marker, options) {
+  let dom = marker.type.serializeDOM(marker, options)
+  for (let attr in marker.type.attrs) {
+    let desc = marker.type.attrs[attr]
+    if (desc.serializeDOM) desc.serializeDOM(dom, marker.attrs[attr], options)
+  }
+  return dom
+}
+
+function wrapInlineFlat(node, dom, options) {
   let styles = node.styles
   for (let i = styles.length - 1; i >= 0; i--) {
-    let wrap = styles[i].type.serializeDOM(styles[i])
+    let wrap = renderStyle(styles[i], options)
     wrap.appendChild(dom)
     dom = wrap
   }
@@ -111,7 +116,7 @@ function renderInlineContentFlat(nodes, where, options) {
   let offset = 0
   for (let i = 0; i < nodes.length; i++) {
     let node = nodes[i]
-    let dom = wrapInlineFlat(node, renderNode(node, options, i))
+    let dom = wrapInlineFlat(node, renderNode(node, options, i), options)
     dom = options.renderInlineFlat(node, dom, offset) || dom
     where.appendChild(dom)
     offset += node.offset
@@ -173,11 +178,12 @@ def(CodeBlock, (node, options) => {
 def(Text, node => doc.createTextNode(node.text))
 
 def(Image, node => {
-  let dom = elt("img")
-  dom.setAttribute("src", node.attrs.src)
-  if (node.attrs.title) dom.setAttribute("title", node.attrs.title)
-  if (node.attrs.alt) dom.setAttribute("alt", node.attrs.alt)
-  return dom
+  return elt("img", {
+    src: node.attrs.src,
+    alt: node.attrs.alt,
+    title: node.attrs.title,
+    contentEditable: false
+  })
 })
 
 def(HardBreak, () => elt("br"))
