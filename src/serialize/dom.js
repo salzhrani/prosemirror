@@ -2,9 +2,21 @@ import {Text, BlockQuote, OrderedList, BulletList, ListItem,
         HorizontalRule, Paragraph, Heading, CodeBlock, Image, HardBreak,
         EmStyle, StrongStyle, LinkStyle, CodeStyle, Pos} from "../model"
 import {defineTarget} from "./index"
-import {elt} from "../dom"
 
 let doc = null
+
+function elt(tag, attrs, ...args) {
+  let result = doc.createElement(tag)
+  if (attrs) for (let name in attrs) {
+    if (name == "style")
+      result.style.cssText = attrs[name]
+    else if (attrs[name])
+      result.setAttribute(name, attrs[name])
+  }
+  for (let i = 0; i < args.length; i++)
+    result.appendChild(typeof args[i] == "string" ? doc.createTextNode(args[i]) : args[i])
+  return result
+}
 
 // declare_global: window
 
@@ -37,7 +49,7 @@ function wrap(node, options, type) {
   if (!node.isTextblock)
     renderNodesInto(node.children, dom, options)
   else if (options.renderInlineFlat)
-    renderInlineContentFlat(node.children, dom, options)
+    renderInlineContentFlat(node, dom, options)
   else
     renderInlineContent(node.children, dom, options)
   return dom
@@ -112,17 +124,17 @@ function wrapInlineFlat(node, dom, options) {
   return dom
 }
 
-function renderInlineContentFlat(nodes, where, options) {
+function renderInlineContentFlat(node, where, options) {
   let offset = 0
-  for (let i = 0; i < nodes.length; i++) {
-    let node = nodes[i]
-    let dom = wrapInlineFlat(node, renderNode(node, options, i), options)
-    dom = options.renderInlineFlat(node, dom, offset) || dom
+  for (let i = 0; i < node.length; i++) {
+    let child = node.child(i)
+    let dom = wrapInlineFlat(child, renderNode(child, options, i), options)
+    dom = options.renderInlineFlat(child, dom, offset) || dom
     where.appendChild(dom)
-    offset += node.offset
+    offset += child.offset
   }
 
-  if (!nodes.length || nodes[nodes.length - 1].type.name == "hard_break")
+  if (!node.type.isCode && (!node.length || where.lastChild.nodeName == "BR"))
     where.appendChild(elt("br")).setAttribute("pm-force-br", "true")
   else if (where.lastChild.contentEditable == "false")
     where.appendChild(doc.createTextNode(""))
@@ -170,21 +182,19 @@ def(CodeBlock, (node, options) => {
   let code = wrap(node, options, "code")
   if (node.attrs.params != null)
     code.className = "fence " + node.attrs.params.replace(/(^|\s+)/g, "$&lang-")
-  return elt("pre", code)
+  return elt("pre", null, code)
 })
 
 // Inline content
 
 def(Text, node => doc.createTextNode(node.text))
 
-def(Image, node => {
-  return elt("img", {
-    src: node.attrs.src,
-    alt: node.attrs.alt,
-    title: node.attrs.title,
-    contentEditable: false
-  })
-})
+def(Image, node => elt("img", {
+  src: node.attrs.src,
+  alt: node.attrs.alt,
+  title: node.attrs.title,
+  contentEditable: false
+}))
 
 def(HardBreak, () => elt("br"))
 
@@ -196,9 +206,5 @@ def(StrongStyle, () => elt("strong"))
 
 def(CodeStyle, () => elt("code"))
 
-def(LinkStyle, style => {
-  let dom = elt("a")
-  dom.setAttribute("href", style.attrs.href)
-  if (style.attrs.title) dom.setAttribute("title", style.attrs.title)
-  return dom
-})
+def(LinkStyle, style => elt("a", {href: style.attrs.href,
+                                  title: style.attrs.title}))
