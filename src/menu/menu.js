@@ -3,7 +3,7 @@ import {elt/*, insertCSS*/} from "../dom"
 
 import {defineParamHandler} from "../edit"
 import sortedInsert from "../util/sortedinsert"
-import {getIcon} from "./icons"
+// import {getIcon} from "./icons"
 
 export class Menu {
   constructor(pm, display) {
@@ -100,9 +100,9 @@ function title(pm, command) {
 }
 
 function renderIcon(command, menu) {
-  let icon = resolveIcon(menu.pm, command)
-  if (command.active(menu.pm)) icon.className += " ProseMirror-icon-active"
-  let dom = elt("span", {class: "ProseMirror-menuicon", title: title(menu.pm, command)}, icon)
+  let icon = "ProseMirror-menuicon ProseMirror-icon-" + command.name
+  if (command.active(menu.pm)) icon += " ProseMirror-icon-active"
+  let dom = elt("span", {class: icon, title: title(menu.pm, command)})
   dom.addEventListener("mousedown", e => {
     e.preventDefault(); e.stopPropagation()
     if (!command.params.length) {
