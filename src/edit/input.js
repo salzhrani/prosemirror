@@ -10,7 +10,8 @@ import {isModifierKey, lookupKey, keyName} from "./keys"
 import {captureKeys} from "./capturekeys"
 import {browser, addClass, rmClass} from "../dom"
 import {applyDOMChange, textContext, textInContext} from "./domchange"
-import {TextSelection, coordsAtPos, rangeFromDOMLoose, selectableNodeAbove} from "./selection"
+import {TextSelection, coordsAtPos, rangeFromDOMLoose, selectableNodeAbove,
+        findSelectionAtStart, findSelectionAtEnd} from "./selection"
 
 let stopSeq = null
 
@@ -313,18 +314,6 @@ handlers.copy = handlers.cut = (pm, e) => {
   }
 }
 
-function docSide(doc, side) {
-  let path = []
-  for (let node = doc; node; node = side == "end" ? node.lastChild : node.firstChild) {
-    let nextOff = side == "end" ? node.maxOffset : 0
-    if (node.isTextblock)
-      return new Pos(path, nextOff)
-    if (node.type.contains == null && node.type.selectable)
-      return Pos.from(path)
-    path.push(nextOff)
-  }
-}
-
 handlers.paste = (pm, e) => {
   if (!e.clipboardData) return
   let sel = pm.selection
@@ -344,7 +333,8 @@ handlers.paste = (pm, e) => {
     } else {
       doc = convertFrom(pm.schema, txt, knownSource("markdown") ? "markdown" : "text")
     }
-    pm.tr.replace(sel.from, sel.to, doc, from || docSide(doc, "start"), to || docSide(doc, "end")).apply()
+    pm.tr.replace(sel.from, sel.to, doc, from || findSelectionAtStart(doc).from,
+                  to || findSelectionAtEnd(doc).to).apply()
     pm.scrollIntoView()
   }
 }
@@ -400,11 +390,12 @@ handlers.paste = (pm, e) => {
 //       tr.deleteSelection()
 //       insertPos = tr.map(insertPos).pos
 //     }
-//     tr.replace(insertPos, insertPos, doc, docSide(doc, "start"), docSide(doc, "end")).apply()
+//     tr.replace(insertPos, insertPos, doc, findSelectionAtStart(doc).from, findSelectionAtEnd(doc).to).apply()
 //     pm.setSelection(insertPos, tr.map(insertPos).pos)
 //     pm.focus()
 //   }
 // }
+
 
 handlers.focus = pm => {
   addClass(pm.wrapper, "ProseMirror-focused")

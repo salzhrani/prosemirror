@@ -3,6 +3,7 @@ import {elt/*, insertCSS*/} from "../dom"
 
 import {defineParamHandler} from "../edit"
 import sortedInsert from "../util/sortedinsert"
+import {getIcon} from "./icons"
 
 export class Menu {
   constructor(pm, display) {
@@ -99,11 +100,9 @@ function title(pm, command) {
 }
 
 function renderIcon(command, menu) {
-  let iconClass = "ProseMirror-menuicon"
-  if (command.active(menu.pm)) iconClass += " ProseMirror-menuicon-active"
-
-  let dom = elt("div", {class: iconClass, title: title(menu.pm, command)},
-                elt("span", {class: "ProseMirror-menuicon ProseMirror-icon-" + command.name}))
+  let icon = resolveIcon(menu.pm, command)
+  if (command.active(menu.pm)) icon.className += " ProseMirror-icon-active"
+  let dom = elt("span", {class: "ProseMirror-menuicon", title: title(menu.pm, command)}, icon)
   dom.addEventListener("mousedown", e => {
     e.preventDefault(); e.stopPropagation()
     if (!command.params.length) {
@@ -118,6 +117,20 @@ function renderIcon(command, menu) {
     }
   })
   return dom
+}
+
+function resolveIcon(pm, command) {
+  for (;;) {
+    let icon = command.info.icon
+    if (!icon) break
+    if (icon.from) {
+      command = pm.commands[icon.from]
+      if (!command) break
+    } else {
+      return getIcon(command.name, icon)
+    }
+  }
+  return elt("span", null, "?") // FIXME saner default?
 }
 
 function renderSelect(item, menu) {
@@ -332,19 +345,6 @@ export function commandGroups(pm, ...names) {
   })
 }
 
-// Awkward hack to force Chrome to initialize the font and not return
-// incorrect size information the first time it is used.
-
-let forced = false
-export function forceFontLoad(pm) {
-  if (forced) return
-  forced = true
-
-  let node = pm.wrapper.appendChild(elt("div", {class: "ProseMirror-menuicon ProseMirror-icon-strong",
-                                                style: "visibility: hidden; position: absolute"}))
-  window.setTimeout(() => pm.wrapper.removeChild(node), 20)
-}
-
 function tooltipParamHandler(pm, command, callback) {
   let tooltip = new Tooltip(pm, "center")
   tooltip.open(paramForm(pm, command, params => {
@@ -358,6 +358,7 @@ defineParamHandler("default", tooltipParamHandler)
 defineParamHandler("tooltip", tooltipParamHandler)
 
 // FIXME check for obsolete styles
+
 // insertCSS(`
 
 // .ProseMirror-menu {
@@ -383,20 +384,7 @@ defineParamHandler("tooltip", tooltipParamHandler)
 // }
 
 // .ProseMirror-menuicon {
-//   display: inline-block;
-//   padding: 1px 4px;
-//   margin: 0 2px;
-//   cursor: pointer;
-//   text-rendering: auto;
-//   -webkit-font-smoothing: antialiased;
-//   -moz-osx-font-smoothing: grayscale;
-//   text-align: center;
-//   vertical-align: middle;
-// }
-
-// .ProseMirror-menuicon-active {
-//   background: #666;
-//   border-radius: 4px;
+//   margin: 0 7px;
 // }
 
 // .ProseMirror-menuseparator {
@@ -406,7 +394,7 @@ defineParamHandler("tooltip", tooltipParamHandler)
 //   content: "︙";
 //   opacity: 0.5;
 //   padding: 0 4px;
-//   vertical-align: middle;
+//   vertical-align: baseline;
 // }
 
 // .ProseMirror-select, .ProseMirror-select-menu {
@@ -421,7 +409,7 @@ defineParamHandler("tooltip", tooltipParamHandler)
 //   vertical-align: middle;
 //   position: relative;
 //   cursor: pointer;
-//   margin: 0 4px;
+//   margin: 0 8px;
 // }
 
 // .ProseMirror-select-command-textblockType {
@@ -449,4 +437,3 @@ defineParamHandler("tooltip", tooltipParamHandler)
 // .ProseMirror-select-menu div:hover {
 //   background: #777;
 // }
-
