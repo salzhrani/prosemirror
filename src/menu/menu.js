@@ -198,7 +198,7 @@ function buildParamForm(pm, command) {
                   .map(o => elt("option", {value: o.value, selected: o == param.default}, o.label))
     else if (param.type == "radio")
       field = elt("div", {class: "ProseMirror-radio" + (param.name ? " ProseMirror-radio-" + param.name : '')}, (param.options.call ? param.options(pm) : param.options)
-                  .map(o => elt("label", {'data-for': o.value}, [elt("input", {class: 'ProseMirror-radio-input', type: "radio", value: o.value, checked: o == param.default, name}), o.label || ''])))
+                  .map(o => elt("label", {'data-for': o.value}, [elt("input", {class: 'ProseMirror-radio-input', type: "radio", value: o.value, checked: o.value == val ? 'checked' : null, name}), o.label || ''])))
     else // FIXME more types
       throw new Error("Unsupported parameter type: " + param.type)
     return elt("div", null, field)
