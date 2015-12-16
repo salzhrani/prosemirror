@@ -1,5 +1,4 @@
 import {defineOption} from "../edit"
-import {spanStylesAt} from "../model"
 import {elt/*, insertCSS*/} from "../dom"
 import {MenuUpdate} from "./update"
 
@@ -43,7 +42,7 @@ class TooltipMenu {
     } else if (!empty) {
       let coords = node ? topOfNodeSelection(this.pm) : topCenterOfSelection()
       return () => this.menu.show(this.inlineItems, coords)
-    } else if (this.emptyBlockMenu && this.pm.doc.path(head.path).length == 0) {
+    } else if (this.emptyBlockMenu && this.pm.doc.path(head.path).size == 0) {
       let coords = this.pm.coordsAtPos(head)
       return () => this.menu.show(this.blockItems, coords)
     } else if (this.showLinks && (link = this.linkUnderCursor())) {
@@ -57,8 +56,8 @@ class TooltipMenu {
   linkUnderCursor() {
     let head = this.pm.selection.head
     if (!head) return null
-    let styles = spanStylesAt(this.pm.doc, head)
-    return styles.reduce((found, st) => found || (st.type.name == "link" && st), null)
+    let marks = this.pm.doc.marksAt(head)
+    return marks.reduce((found, m) => found || (m.type.name == "link" && m), null)
   }
 
   showLink(link, pos) {

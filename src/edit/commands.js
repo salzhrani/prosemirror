@@ -1,7 +1,6 @@
 import {HardBreak, BulletList, OrderedList, ListItem, BlockQuote, Heading, Paragraph, CodeBlock, HorizontalRule,
-        StrongStyle, EmStyle, CodeStyle, LinkStyle, Image, NodeType, StyleType,
-        Pos, containsStyle, rangeHasStyle, compareMarkup} from "../model"
-import {joinPoint, joinableBlocks, canLift, canWrap, alreadyHasBlockType} from "../transform"
+        StrongMark, EmMark, CodeMark, LinkMark, Image, Pos} from "../model"
+import {joinPoint, joinableBlocks, canLift, canWrap} from "../transform"
 import {browser} from "../dom"
 import sortedInsert from "../util/sortedinsert"
 
@@ -12,14 +11,148 @@ import {findSelectionFrom, verticalMotionLeavesTextblock, setDOMSelectionToPos, 
 const globalCommands = Object.create(null)
 const paramHandlers = Object.create(null)
 
-export function defineCommand(name, cmd) {
-  globalCommands[name] = cmd instanceof Command ? cmd : new Command(name, cmd)
+const empty = []
+
+// ;; A command is a named piece of functionality that can be bound to
+// a key, shown in the menu, or otherwise exposed to the user. There
+// are two sources of commands: Global commands, registered with
+// `defineCommand`, are available everywhere. Commands associated with
+// [node](#NodeType) or [mark](#MarkType) types, registered by using
+// the types' [`register`](#NodeType.register) method with the string
+// `"command"`, are available only in editors whose schema contains
+// that node or mark type.
+export class Command {
+  constructor(spec, self) {
+    // :: string The name of the command.
+    this.name = spec.name
+    if (!this.name) throw new Error("Trying to define a command without a name")
+    // :: CommandSpec The command's specifying object.
+    this.spec = spec
+    this.self = self
+  }
+
+  // :: (ProseMirror, ?[any]) → ?bool
+  // Execute this command. If the command takes
+  // [parameters](#Command.params), they can be passed as second
+  // argument here, or omitted, in which case a [parameter
+  // handler](#defineParamHandler) will be called to prompt the user
+  // for values.
+  //
+  // Returns the value returned by the command spec's [`run`
+  // method](#CommandSpec.run), or `false` if the command could not be
+  // ran.
+  exec(pm, params) {
+    let run = this.spec.run
+    if (!this.params.length) return run.call(this.self, pm)
+    if (params) return run.call(this.self, pm, ...params)
+    let handler = getParamHandler(pm)
+    if (!handler) return false
+    handler(pm, this, params => {
+      if (params) run.call(this.self, pm, ...params)
+    })
+  }
+
+  // :: (ProseMirror) → bool
+  // Ask this command whether it is currently relevant, given the
+  // editor's document and selection. If the command does not define a
+  // [`select`](#CommandSpec.select) method, this always returns true.
+  select(pm) {
+    let f = this.spec.select
+    return f ? f.call(this.self, pm) : true
+  }
+
+  // :: (ProseMirror) → bool
+  // Ask this command whether it is “active”. This is mostly used to
+  // style inline mark icons (such as strong) differently when the
+  // selection contains such marks.
+  active(pm) {
+    let f = this.spec.active
+    return f ? f.call(this.self, pm) : false
+  }
+
+  // :: [CommandParam]
+  // Get the list of parameters that this command expects.
+  get params() {
+    return this.spec.params || empty
+  }
+
+  // :: string
+  // Get the label for this command.
+  get label() {
+    return this.spec.label || this.name
+  }
 }
 
-NodeType.attachCommand = StyleType.attachCommand = function(name, create) {
-  this.register("commands", {name, create})
+// ;; #path=CommandSpec #kind=interface #toc=false
+// Commands are defined using objects that specify various aspects of
+// the command. The only properties that _must_ appear in a command
+// spec are [`name`](#CommandSpec.name) and [`run`](#CommandSpec.run).
+// You should probably also give your commands a `label`.
+
+// :: string #path=CommandSpec.name
+// The name of the command, which will be its key in
+// `ProseMirror.commands`, and the thing passed to
+// [`execCommand`](#ProseMirror.execCommand).
+
+// :: string #path=CommandSpec.label
+// A user-facing label for the command. This will be used, among other
+// things. as the tooltip title for the command's menu item. If there
+// is no `label`, the command's `name` will be used instead.
+
+// :: (pm: ProseMirror, ...params: [any]) → ?bool #path=CommandSpec.run
+// The function that executes the command. If the command has
+// [parameters](#CommandSpec.params), their values are passed as
+// arguments. For commands [registered](#NodeType.register) on node or
+// mark types, `this` will be bound to the node or mark type when this
+// function is ran. Should return `false` when the command could not
+// be executed.
+
+// :: [CommandParam] #path=CommandSpec.params
+// The parameters that this command expects.
+
+// :: (pm: ProseMirror) → bool #path=CommandSpec.select
+// The function used to [select](#Command.select) the command. `this`
+// will again be bound to a node or mark type, when available.
+
+// :: (pm: ProseMirror) → bool #path=CommandSpec.active
+// The function used to determine whether the command is
+// [active](#Command.active). `this` refers to the associated node or
+// mark type.
+
+// :: union<string, [string]> #path=CommandSpec.key
+// The default key binding or bindings for this command.
+
+// :: union<string, [string]> #path=CommandSpec.pcKey
+// Default key binding or bindings specific to non-Mac platforms.
+
+// :: union<string, [string]> #path=CommandSpec.macKey
+// Default key binding or bindings specific to the Mac platform.
+
+// ;; #path=CommandParam #kind=interface #toc=false
+// The parameters that a command can take are specified using objects
+// with the following properties:
+
+// :: string #path=CommandParam.label
+// The user-facing name of the parameter. Shown to the user when
+// prompting for this parameter.
+
+// :: string #path=CommandParam.type
+// The type of the parameter. Supported types are `"text"` and `"select"`.
+
+// :: any #path=CommandParam.default
+// A default value for the parameter.
+
+// :: (CommandSpec)
+// Define a global (not node- or mark-specific) command.
+export function defineCommand(spec) {
+  globalCommands[spec.name] = new Command(spec)
 }
 
+// :: (string, (pm: ProseMirror, cmd: Command, callback: (?[any])))
+// Register a parameter handler, which is a function that prompts the
+// user to enter values for a command's [parameters](#CommandParam), and
+// calls a callback with the values received. See also the
+// [`commandParamHandler` option](#commandParamHandler).
 export function defineParamHandler(name, handler) {
   paramHandlers[name] = handler
 }
@@ -29,43 +162,19 @@ function getParamHandler(pm) {
   if (option && paramHandlers[option]) return paramHandlers[option]
 }
 
-export class Command {
-  constructor(name, options) {
-    this.name = name
-    this.label = options.label || name
-    this.run = options.run
-    this.params = options.params || []
-    this.select = options.select || (() => true)
-    this.active = options.active || (() => false)
-    this.info = options
-    this.display = options.display || "icon"
-  }
-
-  exec(pm, params) {
-    if (!this.params.length) return this.run(pm)
-    if (params) return this.run(pm, ...params)
-    let handler = getParamHandler(pm)
-    if (handler) handler(pm, this, params => {
-      if (params) this.run(pm, ...params)
-    })
-    else return false
-  }
-
-}
-
 export function initCommands(schema) {
   let result = Object.create(null)
   for (let cmd in globalCommands) result[cmd] = globalCommands[cmd]
   function fromTypes(types) {
     for (let name in types) {
-      let type = types[name], cmds = type.commands
-      if (cmds) cmds.forEach(({name, create}) => {
-        result[name] = new Command(name, create(type))
+      let type = types[name], cmds = type.command
+      if (cmds) cmds.forEach(spec => {
+        result[spec.name] = new Command(spec, type)
       })
     }
   }
   fromTypes(schema.nodes)
-  fromTypes(schema.styles)
+  fromTypes(schema.marks)
   return result
 }
 
@@ -82,8 +191,8 @@ export function defaultKeymap(pm) {
   }
   for (let name in pm.commands) {
     let cmd = pm.commands[name]
-    add(name, cmd.info.key)
-    add(name, browser.mac ? cmd.info.macKey : cmd.info.pcKey)
+    add(name, cmd.spec.key)
+    add(name, browser.mac ? cmd.spec.macKey : cmd.spec.pcKey)
   }
 
   for (let key in bindings)
@@ -93,7 +202,8 @@ export function defaultKeymap(pm) {
 
 const andScroll = {scrollIntoView: true}
 
-HardBreak.attachCommand("insertHardBreak", type => ({
+HardBreak.register("command", {
+  name: "insertHardBreak",
   label: "Insert hard break",
   run(pm) {
     let {node, from} = pm.selection
@@ -102,71 +212,72 @@ HardBreak.attachCommand("insertHardBreak", type => ({
     else if (pm.doc.path(from.path).type.isCode)
       return pm.tr.typeText("\n").apply(andScroll)
     else
-      return pm.tr.replaceSelection(type.create()).apply(andScroll)
+      return pm.tr.replaceSelection(this.create()).apply(andScroll)
   },
   key: ["Mod-Enter", "Shift-Enter"]
-}))
+})
 
-function inlineStyleActive(pm, type) {
+function markActive(pm, type) {
   let sel = pm.selection
   if (sel.empty)
-    return containsStyle(pm.activeStyles(), type)
+    return type.isInSet(pm.activeMarks())
   else
-    return rangeHasStyle(pm.doc, sel.from, sel.to, type)
+    return pm.doc.rangeHasMark(sel.from, sel.to, type)
 }
 
 function canAddInline(pm, type) {
   let {from, to, empty} = pm.selection
   if (empty)
-    return !containsStyle(pm.activeStyles(), type) && pm.doc.path(from.path).type.canContainStyle(type)
+    return !type.isInSet(pm.activeMarks()) && pm.doc.path(from.path).type.canContainMark(type)
   let can = false
   pm.doc.nodesBetween(from, to, node => {
-    if (can || node.isTextblock && !node.type.canContainStyle(type)) return false
-    if (node.isInline && !containsStyle(node.styles, type)) can = true
+    if (can || node.isTextblock && !node.type.canContainMark(type)) return false
+    if (node.isInline && !type.isInSet(node.marks)) can = true
   })
   return can
 }
 
-function inlineStyleApplies(pm, type) {
+function markApplies(pm, type) {
   let {from, to} = pm.selection
   let relevant = false
   pm.doc.nodesBetween(from, to, node => {
     if (node.isTextblock) {
-      if (node.type.canContainStyle(type)) relevant = true
+      if (node.type.canContainMark(type)) relevant = true
       return false
     }
   })
   return relevant
 }
 
-function generateStyleCommands(type, name, labelName, info) {
+function generateMarkCommands(type, name, labelName, spec) {
   if (!labelName) labelName = name
   let cap = name.charAt(0).toUpperCase() + name.slice(1)
-  type.attachCommand("set" + cap, type => ({
+  type.register("command", {
+    name: "set" + cap,
     label: "Set " + labelName,
-    run(pm) { pm.setStyle(type, true) },
-    select(pm) { return canAddInline(pm, type) },
+    run(pm) { pm.setMark(this, true) },
+    select(pm) { return canAddInline(pm, this) },
     icon: {from: name}
-  }))
-  type.attachCommand("unset" + cap, type => ({
-    label: "Remove " + labelName,
-    run(pm) { pm.setStyle(type, false) },
-    select(pm) { return inlineStyleActive(pm, type) },
-    icon: {from: name}
-  }))
-  type.attachCommand(name, type => {
-    let command = {
-      label: "Toggle " + labelName,
-      run(pm) { pm.setStyle(type, null) },
-      active(pm) { return inlineStyleActive(pm, type) },
-      select(pm) { return inlineStyleApplies(pm, type) }
-    }
-    for (let prop in info) command[prop] = info[prop]
-    return command
   })
+  type.register("command", {
+    name: "unset" + cap,
+    label: "Remove " + labelName,
+    run(pm) { pm.setMark(this, false) },
+    select(pm) { return markActive(pm, this) },
+    icon: {from: name}
+  })
+  let command = {
+    name,
+    label: "Toggle " + labelName,
+    run(pm) { pm.setMark(this, null) },
+    active(pm) { return markActive(pm, this) },
+    select(pm) { return markApplies(pm, this) }
+  }
+  for (let prop in spec) command[prop] = spec[prop]
+  type.register("command", command)
 }
 
-generateStyleCommands(StrongStyle, "strong", null, {
+generateMarkCommands(StrongMark, "strong", null, {
   menuGroup: "inline", menuRank: 20,
   icon: {
     width: 805, height: 1024,
@@ -175,7 +286,7 @@ generateStyleCommands(StrongStyle, "strong", null, {
   key: "Mod-B"
 })
 
-generateStyleCommands(EmStyle, "em", "emphasis", {
+generateMarkCommands(EmMark, "em", "emphasis", {
   menuGroup: "inline", menuRank: 21,
   icon: {
     width: 585, height: 1024,
@@ -184,7 +295,7 @@ generateStyleCommands(EmStyle, "em", "emphasis", {
   key: "Mod-I"
 })
 
-generateStyleCommands(CodeStyle, "code", null, {
+generateMarkCommands(CodeMark, "code", null, {
   menuGroup: "inline", menuRank: 22,
   icon: {
     width: 896, height: 1024,
@@ -193,42 +304,45 @@ generateStyleCommands(CodeStyle, "code", null, {
   key: "Mod-`"
 })
 
-LinkStyle.attachCommand("unlink", type => ({
+LinkMark.register("command", {
+  name: "unlink",
   label: "Unlink",
-  run(pm) { pm.setStyle(type, false) },
-  select(pm) { return inlineStyleActive(pm, type) },
+  run(pm) { pm.setMark(this, false) },
+  select(pm) { return markActive(pm, this) },
   active() { return true },
   menuGroup: "inline", menuRank: 30,
   icon: {from: "link"}
-}))
+})
 
-LinkStyle.attachCommand("link", type => ({
+LinkMark.register("command", {
+  name: "link",
   label: "Add link",
-  run(pm, href, title) { pm.setStyle(type, true, {href, title}) },
+  run(pm, href, title) { pm.setMark(this, true, {href, title}) },
   params: [
-    {name: "Target", type: "text"},
-    {name: "Title", type: "text", default: ""}
+    {label: "Target", type: "text"},
+    {label: "Title", type: "text", default: ""}
   ],
-  select(pm) { return inlineStyleApplies(pm, type) && !inlineStyleActive(pm, type) },
+  select(pm) { return markApplies(pm, this) && !markActive(pm, this) },
   menuGroup: "inline", menuRank: 30,
   icon: {
     width: 951, height: 1024,
     path: "M832 694q0-22-16-38l-118-118q-16-16-38-16-24 0-41 18 1 1 10 10t12 12 8 10 7 14 2 15q0 22-16 38t-38 16q-8 0-15-2t-14-7-10-8-12-12-10-10q-18 17-18 41 0 22 16 38l117 118q15 15 38 15 22 0 38-14l84-83q16-16 16-38zM430 292q0-22-16-38l-117-118q-16-16-38-16-22 0-38 15l-84 83q-16 16-16 38 0 22 16 38l118 118q15 15 38 15 24 0 41-17-1-1-10-10t-12-12-8-10-7-14-2-15q0-22 16-38t38-16q8 0 15 2t14 7 10 8 12 12 10 10q18-17 18-41zM941 694q0 68-48 116l-84 83q-47 47-116 47-69 0-116-48l-117-118q-47-47-47-116 0-70 50-119l-50-50q-49 50-118 50-68 0-116-48l-118-118q-48-48-48-116t48-116l84-83q47-47 116-47 69 0 116 48l117 118q47 47 47 116 0 70-50 119l50 50q49-50 118-50 68 0 116 48l118 118q48 48 48 116z"
   }
-}))
+})
 
-Image.attachCommand("insertImage", type => ({
+Image.register("command", {
+  name: "insertImage",
   label: "Insert image",
   run(pm, src, alt, title) {
-    return pm.tr.replaceSelection(type.create({src, title, alt})).apply(andScroll)
+    return pm.tr.replaceSelection(this.create({src, title, alt})).apply(andScroll)
   },
   params: [
-    {name: "Image URL", type: "text"},
-    {name: "Description / alternative text", type: "text", default: ""},
-    {name: "Title", type: "text", default: ""}
+    {label: "Image URL", type: "text"},
+    {label: "Description / alternative text", type: "text", default: ""},
+    {label: "Title", type: "text", default: ""}
   ],
   select(pm) {
-    return pm.doc.path(pm.selection.from.path).type.canContainType(type)
+    return pm.doc.path(pm.selection.from.path).type.canContainType(this)
   },
   menuGroup: "inline", menuRank: 40,
   icon: {
@@ -237,10 +351,10 @@ Image.attachCommand("insertImage", type => ({
   },
   prefillParams(pm) {
     let {node} = pm.selection
-    if (node && node.type == type)
+    if (node && node.type == this)
       return [node.attrs.src, node.attrs.alt, node.attrs.title]
   }
-}))
+})
 
 /**
  * Get an offset moving backward from a current offset inside a node.
@@ -248,21 +362,20 @@ Image.attachCommand("insertImage", type => ({
  * @param  {Object} parent The parent node.
  * @param  {int}    offset Offset to move from inside the node.
  * @param  {string} by     Size to delete by. Either "char" or "word".
- * @return {[type]}        [description]
  */
 function moveBackward(parent, offset, by) {
   if (by != "char" && by != "word")
     throw new Error("Unknown motion unit: " + by)
 
-  let {index, innerOffset} = parent.childBefore(offset)
   let cat = null, counted = 0
-  for (; index >= 0; index--, innerOffset = null) {
-    let child = parent.child(index), size = child.offset
-    if (!child.isText) return cat ? offset : offset - 1
+  for (;;) {
+    if (offset == 0) return offset
+    let {start, node} = parent.chunkBefore(offset)
+    if (!node.isText) return cat ? offset : offset - 1
 
     if (by == "char") {
-      for (let i = innerOffset == null ? size : innerOffset; i > 0; i--) {
-        if (!isExtendingChar(child.text.charAt(i - 1)))
+      for (let i = offset - start; i > 0; i--) {
+        if (!isExtendingChar(node.text.charAt(i - 1)))
           return offset - 1
         offset--
       }
@@ -270,8 +383,8 @@ function moveBackward(parent, offset, by) {
       // Work from the current position backwards through text of a singular
       // character category (e.g. "cat" of "#!*") until reaching a character in a
       // different category (i.e. the end of the word).
-      for (let i = innerOffset == null ? size : innerOffset; i > 0; i--) {
-        let nextCharCat = charCategory(child.text.charAt(i - 1))
+      for (let i = offset - start; i > 0; i--) {
+        let nextCharCat = charCategory(node.text.charAt(i - 1))
         if (cat == null || counted == 1 && cat == "space") cat = nextCharCat
         else if (cat != nextCharCat) return offset
         offset--
@@ -279,10 +392,10 @@ function moveBackward(parent, offset, by) {
       }
     }
   }
-  return offset
 }
 
-defineCommand("deleteSelection", {
+defineCommand({
+  name: "deleteSelection",
   label: "Delete the selection",
   run(pm) {
     return pm.tr.replaceSelection().apply(andScroll)
@@ -294,7 +407,7 @@ defineCommand("deleteSelection", {
 function deleteBarrier(pm, cut) {
   let around = pm.doc.path(cut.path)
   let before = around.child(cut.offset - 1), after = around.child(cut.offset)
-  if (before.type.canContainChildren(after) && pm.tr.join(cut).apply(andScroll) !== false)
+  if (before.type.canContainContent(after.type) && pm.tr.join(cut).apply(andScroll) !== false)
     return
 
   let conn
@@ -311,7 +424,8 @@ function deleteBarrier(pm, cut) {
   return pm.tr.lift(selAfter.from, selAfter.to).apply(andScroll)
 }
 
-defineCommand("joinBackward", {
+defineCommand({
+  name: "joinBackward",
   label: "Join with the block above",
   run(pm) {
     let {head, empty} = pm.selection
@@ -338,7 +452,8 @@ defineCommand("joinBackward", {
   key: ["Backspace(30)", "Mod-Backspace(30)"]
 })
 
-defineCommand("deleteCharBefore", {
+defineCommand({
+  name: "deleteCharBefore",
   label: "Delete a character before the cursor",
   run(pm) {
     let {head, empty} = pm.selection
@@ -350,7 +465,8 @@ defineCommand("deleteCharBefore", {
   macKey: "Ctrl-H(40)"
 })
 
-defineCommand("deleteWordBefore", {
+defineCommand({
+  name: "deleteWordBefore",
   label: "Delete the word before the cursor",
   run(pm) {
     let {head, empty} = pm.selection
@@ -366,21 +482,21 @@ function moveForward(parent, offset, by) {
   if (by != "char" && by != "word")
     throw new Error("Unknown motion unit: " + by)
 
-  let {index, innerOffset} = parent.childAfter(offset)
   let cat = null, counted = 0
-  for (; index < parent.length; index++, innerOffset = 0) {
-    let child = parent.child(index), size = child.offset
-    if (!child.isText) return cat ? offset : offset + 1
+  for (;;) {
+    if (offset == parent.size) return offset
+    let {start, node} = parent.chunkAfter(offset)
+    if (!node.isText) return cat ? offset : offset + 1
 
     if (by == "char") {
-      for (let i = innerOffset; i < size; i++) {
-        if (!isExtendingChar(child.text.charAt(i + 1)))
+      for (let i = offset - start; i < node.text.length; i++) {
+        if (!isExtendingChar(node.text.charAt(i + 1)))
           return offset + 1
         offset++
       }
     } else if (by == "word") {
-      for (let i = innerOffset; i < size; i++) {
-        let nextCharCat = charCategory(child.text.charAt(i))
+      for (let i = offset - start; i < node.text.length; i++) {
+        let nextCharCat = charCategory(node.text.charAt(i))
         if (cat == null || counted == 1 && cat == "space") cat = nextCharCat
         else if (cat != nextCharCat) return offset
         offset++
@@ -388,21 +504,21 @@ function moveForward(parent, offset, by) {
       }
     }
   }
-  return offset
 }
 
-defineCommand("joinForward", {
+defineCommand({
+  name: "joinForward",
   label: "Join with the block below",
   run(pm) {
     let {head, empty} = pm.selection
-    if (!empty || head.offset < pm.doc.path(head.path).maxOffset) return false
+    if (!empty || head.offset < pm.doc.path(head.path).size) return false
 
     // Find the node after this one
     let after, cut
     for (let i = head.path.length - 1; !after && i >= 0; i--) {
       cut = head.shorten(i, 1)
       let parent = pm.doc.path(cut.path)
-      if (cut.offset < parent.length)
+      if (cut.offset < parent.size)
         after = parent.child(cut.offset)
     }
 
@@ -419,11 +535,12 @@ defineCommand("joinForward", {
   key: ["Delete(30)", "Mod-Delete(30)"]
 })
 
-defineCommand("deleteCharAfter", {
+defineCommand({
+  name: "deleteCharAfter",
   label: "Delete a character after the cursor",
   run(pm) {
     let {head, empty} = pm.selection
-    if (!empty || head.offset == pm.doc.path(head.path).maxOffset) return false
+    if (!empty || head.offset == pm.doc.path(head.path).size) return false
     let to = moveForward(pm.doc.path(head.path), head.offset, "char")
     return pm.tr.delete(head, new Pos(head.path, to)).apply(andScroll)
   },
@@ -431,11 +548,12 @@ defineCommand("deleteCharAfter", {
   macKey: "Ctrl-D(60)"
 })
 
-defineCommand("deleteWordAfter", {
+defineCommand({
+  name: "deleteWordAfter",
   label: "Delete a character after the cursor",
   run(pm) {
     let {head, empty} = pm.selection
-    if (!empty || head.offset == pm.doc.path(head.path).maxOffset) return false
+    if (!empty || head.offset == pm.doc.path(head.path).size) return false
     let to = moveForward(pm.doc.path(head.path), head.offset, "word")
     return pm.tr.delete(head, new Pos(head.path, to)).apply(andScroll)
   },
@@ -449,7 +567,8 @@ function joinPointAbove(pm) {
   else return joinPoint(pm.doc, from, -1)
 }
 
-defineCommand("joinUp", {
+defineCommand({
+  name: "joinUp",
   label: "Join with above block",
   run(pm) {
     let node = pm.selection.node
@@ -473,7 +592,8 @@ function joinPointBelow(pm) {
   else return joinPoint(pm.doc, to, 1)
 }
 
-defineCommand("joinDown", {
+defineCommand({
+  name: "joinDown",
   label: "Join with below block",
   run(pm) {
     let node = pm.selection.node
@@ -486,7 +606,8 @@ defineCommand("joinDown", {
   key: "Alt-Down"
 })
 
-defineCommand("lift", {
+defineCommand({
+  name: "lift",
   label: "Lift out of enclosing block",
   run(pm) {
     let {from, to} = pm.selection
@@ -511,32 +632,31 @@ function isAtTopOfListItem(doc, from, to, listType) {
     listType.canContain(doc.path(from.path.slice(0, from.path.length - 1)))
 }
 
-function wrapCommand(type, name, labelName, isList, info) {
-  type.attachCommand("wrap" + name, type => {
-    let command = {
-      label: "Wrap in " + labelName,
-      run(pm) {
-        let {from, to, head} = pm.selection, doJoin = false
-        if (isList && head && isAtTopOfListItem(pm.doc, from, to, type)) {
-          // Don't do anything if this is the top of the list
-          if (from.path[from.path.length - 2] == 0) return false
-          doJoin = true
-        }
-        let tr = pm.tr.wrap(from, to, type)
-        if (doJoin) tr.join(from.shorten(from.depth - 2))
-        return tr.apply(andScroll)
-      },
-      select(pm) {
-        let {from, to, head} = pm.selection
-        if (isList && head && isAtTopOfListItem(pm.doc, from, to, type) &&
-            from.path[from.path.length - 2] == 0)
-          return false
-        return canWrap(pm.doc, from, to, type)
+function wrapCommand(type, name, labelName, isList, spec) {
+  let command = {
+    name: "wrap" + name,
+    label: "Wrap in " + labelName,
+    run(pm) {
+      let {from, to, head} = pm.selection, doJoin = false
+      if (isList && head && isAtTopOfListItem(pm.doc, from, to, this)) {
+        // Don't do anything if this is the top of the list
+        if (from.path[from.path.length - 2] == 0) return false
+        doJoin = true
       }
+      let tr = pm.tr.wrap(from, to, this)
+      if (doJoin) tr.join(from.shorten(from.depth - 2))
+      return tr.apply(andScroll)
+    },
+    select(pm) {
+      let {from, to, head} = pm.selection
+      if (isList && head && isAtTopOfListItem(pm.doc, from, to, this) &&
+          from.path[from.path.length - 2] == 0)
+        return false
+      return canWrap(pm.doc, from, to, this)
     }
-    for (let key in info) command[key] = info[key]
-    return command
-  })
+  }
+  for (let key in spec) command[key] = spec[key]
+  type.register("command", command)
 }
 
 wrapCommand(BulletList, "BulletList", "bullet list", true, {
@@ -566,13 +686,14 @@ wrapCommand(BlockQuote, "BlockQuote", "block quote", false, {
   key: ["Alt-Right '>'", "Alt-Right '\"'"]
 })
 
-defineCommand("newlineInCode", {
+defineCommand({
+  name: "newlineInCode",
   label: "Insert newline",
   run(pm) {
     let {from, to, node} = pm.selection, block
     if (!node && Pos.samePath(from.path, to.path) &&
         (block = pm.doc.path(from.path)).type.isCode &&
-        to.offset < block.maxOffset)
+        to.offset < block.size)
       return pm.tr.typeText("\n").apply(andScroll)
     else
       return false
@@ -580,19 +701,21 @@ defineCommand("newlineInCode", {
   key: "Enter(10)"
 })
 
-defineCommand("createParagraphNear", {
+defineCommand({
+  name: "createParagraphNear",
   label: "Create a paragraph near the selected leaf block",
   run(pm) {
     let {from, to, node} = pm.selection
     if (!node || !node.isBlock || node.type.contains) return false
     let side = from.offset ? to : from
     pm.tr.insert(side, pm.schema.defaultTextblockType().create()).apply(andScroll)
-    pm.setSelection(new Pos(side.toPath(), 0))
+    pm.setTextSelection(new Pos(side.toPath(), 0))
   },
   key: "Enter(20)"
 })
 
-defineCommand("liftEmptyBlock", {
+defineCommand({
+  name: "liftEmptyBlock",
   label: "Move current block up",
   run(pm) {
     let {head, empty} = pm.selection
@@ -605,7 +728,8 @@ defineCommand("liftEmptyBlock", {
   key: "Enter(30)"
 })
 
-defineCommand("splitBlock", {
+defineCommand({
+  name: "splitBlock",
   label: "Split the current block",
   run(pm) {
     let {from, to, node} = pm.selection, block = pm.doc.path(to.path)
@@ -613,44 +737,58 @@ defineCommand("splitBlock", {
       if (!from.offset) return false
       return pm.tr.split(from).apply(andScroll)
     } else {
-      let type = to.offset == block.maxOffset ? pm.schema.defaultTextblockType() : null
+      let type = to.offset == block.size ? pm.schema.defaultTextblockType() : null
       return pm.tr.delete(from, to).split(from, 1, type).apply(andScroll)
     }
   },
   key: "Enter(60)"
 })
 
-ListItem.attachCommand("splitListItem", type => ({
+ListItem.register("command", {
+  name: "splitListItem",
   label: "Split the current list item",
   run(pm) {
     let {from, to, node, empty} = pm.selection
     if (node && node.isBlock || from.path.length < 2 || !Pos.samePath(from.path, to.path) ||
         empty && from.offset == 0) return false
     let toParent = from.shorten(), grandParent = pm.doc.path(toParent.path)
-    if (grandParent.type != type) return false
-    let nextType = to.offset == grandParent.child(toParent.offset).maxOffset ? pm.schema.defaultTextblockType() : null
+    if (grandParent.type != this) return false
+    let nextType = to.offset == grandParent.child(toParent.offset).size ? pm.schema.defaultTextblockType() : null
     return pm.tr.delete(from, to).split(from, 2, nextType).apply(andScroll)
   },
   key: "Enter(50)"
-}))
+})
+
+function alreadyHasBlockType(doc, from, to, type, attrs) {
+  let found = false
+  if (!attrs) attrs = {}
+  doc.nodesBetween(from, to || from, node => {
+    if (node.isTextblock) {
+      if (node.hasMarkup(type, attrs)) found = true
+      return false
+    }
+  })
+  return found
+}
 
 function blockTypeCommand(type, name, labelName, attrs, key) {
   if (!attrs) attrs = {}
-  type.attachCommand(name, type => ({
+  type.register("command", {
+    name,
     label: "Change to " + labelName,
     run(pm) {
       let {from, to} = pm.selection
-      return pm.tr.setBlockType(from, to, type, attrs).apply(andScroll)
+      return pm.tr.setBlockType(from, to, this, attrs).apply(andScroll)
     },
     select(pm) {
       let {from, to, node} = pm.selection
       if (node)
-        return node.isTextblock && !compareMarkup(type, node.type, attrs, node.attrs)
+        return node.isTextblock && !node.hasMarkup(this, attrs)
       else
-        return !alreadyHasBlockType(pm.doc, from, to, type, attrs)
+        return !alreadyHasBlockType(pm.doc, from, to, this, attrs)
     },
     key
-  }))
+  })
 }
 
 blockTypeCommand(Heading, "makeH1", "heading 1", {level: 1}, "Mod-H '1'")
@@ -663,15 +801,17 @@ blockTypeCommand(Heading, "makeH6", "heading 6", {level: 6}, "Mod-H '6'")
 blockTypeCommand(Paragraph, "makeParagraph", "paragraph", null, "Mod-P")
 blockTypeCommand(CodeBlock, "makeCodeBlock", "code block", null, "Mod-\\")
 
-HorizontalRule.attachCommand("insertHorizontalRule", type => ({
+HorizontalRule.register("command", {
+  name: "insertHorizontalRule",
   label: "Insert horizontal rule",
   run(pm) {
-    return pm.tr.replaceSelection(type.create()).apply(andScroll)
+    return pm.tr.replaceSelection(this.create()).apply(andScroll)
   },
   key: "Mod-Space"
-}))
+})
 
-defineCommand("undo", {
+defineCommand({
+  name: "undo",
   label: "Undo last change",
   run(pm) { pm.scrollIntoView(); return pm.history.undo() },
   select(pm) { return pm.history.canUndo() },
@@ -683,7 +823,8 @@ defineCommand("undo", {
   key: "Mod-Z"
 })
 
-defineCommand("redo", {
+defineCommand({
+  name: "redo",
   label: "Redo last undone change",
   run(pm) { pm.scrollIntoView(); return pm.history.redo() },
   select(pm) { return pm.history.canRedo() },
@@ -695,7 +836,8 @@ defineCommand("redo", {
   key: ["Mod-Y", "Shift-Mod-Z"]
 })
 
-defineCommand("textblockType", {
+defineCommand({
+  name: "textblockType",
   label: "Change block type",
   run(pm, type) {
     let {from, to} = pm.selection
@@ -706,7 +848,7 @@ defineCommand("textblockType", {
     return !node || node.isTextblock
   },
   params: [
-    {name: "Type", type: "select", options: listTextblockTypes, default: currentTextblockType, defaultLabel: "Type..."}
+    {label: "Type", type: "select", options: listTextblockTypes, default: currentTextblockType, defaultLabel: "Type..."}
   ],
   display: "select",
   menuGroup: "block", menuRank: 10
@@ -744,7 +886,7 @@ function currentTextblockType(pm) {
   let types = listTextblockTypes(pm)
   for (let i = 0; i < types.length; i++) {
     let tp = types[i], val = tp.value
-    if (compareMarkup(val.type, node.type, val.attrs, node.attrs)) return tp
+    if (node.hasMarkup(val.type, val.attrs)) return tp
   }
 }
 
@@ -756,7 +898,8 @@ function nodeAboveSelection(pm) {
   return i == 0 ? false : sel.head.shorten(i - 1)
 }
 
-defineCommand("selectParentBlock", {
+defineCommand({
+  name: "selectParentBlock",
   label: "Select parent node",
   run(pm) {
     let node = nodeAboveSelection(pm)
@@ -782,16 +925,15 @@ function selectBlockHorizontally(pm, dir) {
   if (!empty && !node) return false
 
   if (node && node.isInline) {
-    pm.setSelection(dir > 0 ? to : from)
+    pm.setTextSelection(dir > 0 ? to : from)
     return true
   }
 
   let parent
   if (!node && (parent = pm.doc.path(from.path)) &&
-      (dir > 0 ? from.offset < parent.maxOffset : from.offset)) {
-    let {node: nextNode, innerOffset} = dir > 0 ? parent.childAfter(from.offset) : parent.childBefore(from.offset)
-    if (nextNode && nextNode.type.selectable &&
-        (dir > 0 ? !innerOffset : innerOffset == nextNode.offset)) {
+      (dir > 0 ? from.offset < parent.size : from.offset)) {
+    let {node: nextNode, start} = dir > 0 ? parent.chunkAfter(from.offset) : parent.chunkBefore(from.offset)
+    if (nextNode.type.selectable && start == from.offset - (dir > 0 ? 0 : 1)) {
       pm.setNodeSelection(dir < 0 ? from.move(-1) : from)
       return true
     }
@@ -800,13 +942,14 @@ function selectBlockHorizontally(pm, dir) {
 
   let next = moveSelectionBlock(pm, dir)
   if (next && (next instanceof NodeSelection || node)) {
-    pm.setSelection(next)
+    pm.setSelectionDirect(next)
     return true
   }
   return false
 }
 
-defineCommand("selectBlockLeft", {
+defineCommand({
+  name: "selectBlockLeft",
   label: "Move the selection onto or out of the block to the left",
   run(pm) {
     let done = selectBlockHorizontally(pm, -1)
@@ -816,7 +959,8 @@ defineCommand("selectBlockLeft", {
   key: ["Left", "Mod-Left"]
 })
 
-defineCommand("selectBlockRight", {
+defineCommand({
+  name: "selectBlockRight",
   label: "Move the selection onto or out of the block to the right",
   run(pm) {
     let done = selectBlockHorizontally(pm, 1)
@@ -837,7 +981,7 @@ function selectBlockVertically(pm, dir) {
   if (leavingTextblock) {
     let next = moveSelectionBlock(pm, dir)
     if (next && (next instanceof NodeSelection)) {
-      pm.setSelection(next)
+      pm.setSelectionDirect(next)
       if (!node) pm.sel.lastNonNodePos = from
       return true
     }
@@ -856,11 +1000,12 @@ function selectBlockVertically(pm, dir) {
     setDOMSelectionToPos(pm, last)
     return false
   }
-  pm.setSelection(beyond)
+  pm.setSelectionDirect(beyond)
   return true
 }
 
-defineCommand("selectBlockUp", {
+defineCommand({
+  name: "selectBlockUp",
   label: "Move the selection onto or out of the block above",
   run(pm) {
     let done = selectBlockVertically(pm, -1)
@@ -870,7 +1015,8 @@ defineCommand("selectBlockUp", {
   key: "Up"
 })
 
-defineCommand("selectBlockDown", {
+defineCommand({
+  name: "selectBlockDown",
   label: "Move the selection onto or out of the block below",
   run(pm) {
     let done = selectBlockVertically(pm, 1)
