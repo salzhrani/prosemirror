@@ -19,6 +19,8 @@ export class SelectionState {
 
   setAndSignal(range, clearLast) {
     this.set(range, clearLast)
+    // :: () #path=ProseMirror#events#selectionChange
+    // Indicates that the editor's selection has changed.
     this.pm.signal("selectionChange")
   }
 
@@ -26,11 +28,6 @@ export class SelectionState {
     this.range = range
     if (!range.node) this.lastNonNodePos = null
     if (clearLast !== false) this.lastAnchorNode = null
-  }
-
-  setNodeAndSignal(pos) {
-    this.setNode(pos)
-    this.pm.signal("selectionChange")
   }
 
   pollForUpdate() {
@@ -112,11 +109,8 @@ export class SelectionState {
   nodeToDOM(takeFocus) {
     window.getSelection().removeAllRanges()
     if (takeFocus) this.pm.content.focus()
-    let pos = this.range.from, node = this.range.node, dom
-    if (node.isInline)
-      dom = findByOffset(resolvePath(this.pm.content, pos.path), pos.offset, true).node
-    else
-      dom = resolvePath(this.pm.content, pos.toPath())
+    let pos = this.range.from, node = this.range.node
+    let dom = resolvePath(this.pm.content, pos.toPath())
     if (dom == this.lastNode) return
     this.clearNode()
     addNodeSelection(node, dom)
@@ -188,45 +182,47 @@ function windowRect() {
           top: 0, bottom: window.innerHeight}
 }
 
-export class Selection {}
+// ;; An editor selection. Can be one of two selection types:
+// `TextSelection` and `NodeSelection`. Both have the properties
+// listed here, but also contain more information (such as the
+// selected [node](#NodeSelection.node) or the
+// [head](#TextSelection.head) and [anchor](#TextSelection.anchor)).
+export class Selection {
+  // :: Pos #path=Selection.prototype.from
+  // The start of the selection.
 
-export class NodeSelection extends Selection {
-  constructor(from, to, node) {
-    super()
-    this.from = from
-    this.to = to
-    this.node = node
-  }
+  // :: Pos #path=Selection.prototype.to
+  // The end of the selection.
 
-  get empty() { return false }
+  // :: bool #path=Selection.empty
+  // True if the selection is an empty text selection (head an anchor
+  // are the same).
 
-  eq(other) {
-    return other instanceof NodeSelection && !this.from.cmp(other.from)
-  }
+  // :: (other: Selection) → bool #path=Selection.eq
+  // Test whether the selection is the same as another selection.
 
-  map(doc, mapping) {
-    let from = mapping.map(this.from, 1).pos
-    let to = mapping.map(this.to, -1).pos
-    if (Pos.samePath(from.path, to.path) && from.offset == to.offset - 1) {
-      let parent = doc.path(from.path)
-      let node = parent.isTextblock ? parent.childAfter(from.offset).node : parent.child(from.offset)
-      if (node.type.selectable)
-        return new NodeSelection(from, to, node)
-    }
-    return findSelectionNear(doc, from)
-  }
+  // :: (doc: Node, mapping: Mappable) → Selection #path=Selection.map
+  // Map this selection through a [mappable](#Mappable) thing. `doc`
+  // should be the new document, to which we are mapping.
 }
 
-/**
- * Text selection range class.
- *
- * A range consists of a head (the active location of the cursor)
- * and an anchor (the start location of the selection).
- */
+// ;; #toc=false A text selection represents a classical editor
+// selection, with a head (the moving side) and anchor (immobile
+// side), both of which point into textblock nodes. It can be empty (a
+// regular cursor position).
 export class TextSelection extends Selection {
+  // :: (Pos, ?Pos)
+  // Construct a text selection. When `head` is not given, it defaults
+  // to `anchor`.
   constructor(anchor, head) {
     super()
+    // :: Pos
+    // The selection's immobile side (does not move when pressing
+    // shift-arrow).
     this.anchor = anchor
+    // :: Pos
+    // The selection's mobile side (the side that moves when pressing
+    // shift-arrow).
     this.head = head || anchor
   }
 
@@ -248,52 +244,95 @@ export class TextSelection extends Selection {
   }
 }
 
-function pathFromNode(node) {
+// ;; #toc=false A node selection is a selection that points at a
+// single node. All nodes marked [selectable](#NodeType.selectable)
+// can be the target of a node selection. In such an object, `from`
+// and `to` point directly before and after the selected node.
+export class NodeSelection extends Selection {
+  // :: (Pos, Pos, Node)
+  // Create a node selection. Does not verify the validity of its
+  // arguments. Use `ProseMirror.setNodeSelection` for an easier,
+  // error-checking way to create a node selection.
+  constructor(from, to, node) {
+    super()
+    this.from = from
+    this.to = to
+    // :: Node The selected node.
+    this.node = node
+  }
+
+  get empty() { return false }
+
+  eq(other) {
+    return other instanceof NodeSelection && !this.from.cmp(other.from)
+  }
+
+  map(doc, mapping) {
+    let from = mapping.map(this.from, 1).pos
+    let to = mapping.map(this.to, -1).pos
+    if (Pos.samePath(from.path, to.path) && from.offset == to.offset - 1) {
+      let node = doc.nodeAfter(from)
+      if (node.type.selectable) return new NodeSelection(from, to, node)
+    }
+    return findSelectionNear(doc, from)
+  }
+}
+
+function pathFromDOM(node) {
   let path = []
   for (;;) {
-    let attr = node.getAttribute("pm-path")
+    let attr = node.getAttribute("pm-offset")
     if (!attr) return path
     path.unshift(+attr)
     node = node.parentNode
   }
 }
 
-function posFromDOMInner(pm, node, domOffset, loose) {
+function widthFromDOM(dom) {
+  let attr = dom.getAttribute("pm-leaf")
+  return attr && attr != "true" ? +attr : 1
+}
+
+function posFromDOMInner(pm, dom, domOffset, loose) {
   if (!loose && pm.operation && pm.doc != pm.operation.doc)
     throw new Error("Fetching a position from an outdated DOM structure")
 
   let extraOffset = 0, tag
   for (;;) {
-    if (node.nodeType == 3)
+    let adjust = 0
+    if (dom.nodeType == 3) {
       extraOffset += domOffset
-    else if (node.hasAttribute("pm-path") || node == pm.content)
+    } else if (dom.hasAttribute("pm-offset") || dom == pm.content) {
       break
-    else if (tag = node.getAttribute("pm-span-offset"))
+    } else if (tag = dom.getAttribute("pm-inner-offset")) {
       extraOffset += +tag
+      adjust = -1
+    } else if (domOffset && domOffset == dom.childNodes.length) {
+      adjust = 1
+    }
 
-    let parent = node.parentNode
-    domOffset = Array.prototype.indexOf.call(parent.childNodes, node) +
-      (node.nodeType != 3 && domOffset == node.childNodes.length ? 1 : 0)
-    node = parent
+    let parent = dom.parentNode
+    domOffset = adjust < 0 ? 0 : Array.prototype.indexOf.call(parent.childNodes, dom) + adjust
+    dom = parent
   }
+
+  let path = pathFromDOM(dom)
+  if (dom.hasAttribute("pm-leaf"))
+    return Pos.from(path, extraOffset + (domOffset ? 1 : 0))
 
   let offset = 0
   for (let i = domOffset - 1; i >= 0; i--) {
-    let child = node.childNodes[i]
+    let child = dom.childNodes[i]
     if (child.nodeType == 3) {
       if (loose) extraOffset += child.nodeValue.length
-    } else if (tag = child.getAttribute("pm-span")) {
-      offset = parseSpan(tag).to
+    } else if (tag = child.getAttribute("pm-offset")) {
+      offset = +tag + widthFromDOM(child)
       break
-    } else if (tag = child.getAttribute("pm-path")) {
-      offset = +tag + 1
-      extraOffset = 0
-      break
-    } else if (loose) {
+    } else if (loose && !child.hasAttribute("pm-ignore")) {
       extraOffset += child.textContent.length
     }
   }
-  return new Pos(pathFromNode(node), offset + extraOffset)
+  return new Pos(path, offset + extraOffset)
 }
 
 export function posFromDOM(pm, node, offset) {
@@ -315,11 +354,11 @@ export function findByPath(node, n, fromEnd) {
   for (let ch = fromEnd ? node.lastChild : node.firstChild; ch;
        ch = fromEnd ? ch.previousSibling : ch.nextSibling) {
     if (ch.nodeType != 1) continue
-    let path = ch.getAttribute("pm-path")
-    if (!path) {
+    let offset = ch.getAttribute("pm-offset")
+    if (!offset) {
       let found = findByPath(ch, n)
       if (found) return found
-    } else if (+path == n) {
+    } else if (+offset == n) {
       return ch
     }
   }
@@ -334,22 +373,13 @@ export function resolvePath(parent, path) {
   return node
 }
 
-function parseSpan(span) {
-  let [_, from, to] = /^(\d+)-(\d+)$/.exec(span)
-  return {from: +from, to: +to}
-}
-
 function findByOffset(node, offset, after) {
   function search(node) {
     for (let ch = node.firstChild, i = 0, attr; ch; ch = ch.nextSibling, i++) {
       if (ch.nodeType != 1) continue
-      if (attr = ch.getAttribute("pm-span")) {
-        let {from, to} = parseSpan(attr)
-        if (after ? from == offset : to >= offset)
-          return {node: ch, offset: i, innerOffset: offset - from}
-      } else if (attr = ch.getAttribute("pm-path")) {
-        let diff = offset - +attr
-        if (diff == 0 || (after && diff == 1))
+      if (attr = ch.getAttribute("pm-offset")) {
+        let diff = offset - +attr, width = widthFromDOM(ch)
+        if (diff >= 0 && (after ? diff <= width : diff < width))
           return {node: ch, offset: i, innerOffset: diff}
       } else {
         let result = search(ch)
@@ -365,11 +395,11 @@ function leafAt(node, offset) {
     let child = node.firstChild
     if (!child) return {node, offset}
     if (child.nodeType != 1) return {node: child, offset}
-    if (child.hasAttribute("pm-span-offset")) {
+    if (child.hasAttribute("pm-inner-offset")) {
       let nodeOffset = 0
       for (;;) {
         let nextSib = child.nextSibling, nextOffset
-        if (!nextSib || (nextOffset = +nextSib.getAttribute("pm-span-offset")) >= offset) break
+        if (!nextSib || (nextOffset = +nextSib.getAttribute("pm-inner-offset")) >= offset) break
         child = nextSib
         nodeOffset = nextOffset
       }
@@ -387,10 +417,10 @@ function leafAt(node, offset) {
  * @return {Object}     The DOM node and character offset inside the node.
  */
 function DOMFromPos(parent, pos) {
-  let node = resolvePath(parent, pos.path)
-  let found = findByOffset(node, pos.offset), inner
-  if (!found) return {node: node, offset: 0}
-  if (found.node.hasAttribute("pm-span-atom") || !(inner = leafAt(found.node, found.innerOffset)))
+  let dom = resolvePath(parent, pos.path)
+  let found = findByOffset(dom, pos.offset, true), inner
+  if (!found) return {node: dom, offset: 0}
+  if (found.node.getAttribute("pm-leaf") == "true" || !(inner = leafAt(found.node, found.innerOffset)))
     return {node: found.node.parentNode, offset: found.offset + (found.innerOffset ? 1 : 0)}
   else
     return inner
@@ -544,12 +574,12 @@ function findSelectionIn(doc, path, offset, dir, text) {
   let node = doc.path(path)
   if (node.isTextblock) return new TextSelection(new Pos(path, offset))
 
-  for (let i = offset + (dir > 0 ? 0 : -1); dir > 0 ? i < node.maxOffset : i >= 0; i += dir) {
+  for (let i = offset + (dir > 0 ? 0 : -1); dir > 0 ? i < node.size : i >= 0; i += dir) {
     let child = node.child(i)
     if (!text && child.type.contains == null && child.type.selectable)
       return new NodeSelection(new Pos(path, i), new Pos(path, i + 1), child)
     path.push(i)
-    let inside = findSelectionIn(doc, path, dir < 0 ? child.maxOffset : 0, dir, text)
+    let inside = findSelectionIn(doc, path, dir < 0 ? child.size : 0, dir, text)
     if (inside) return inside
     path.pop()
   }
@@ -577,27 +607,22 @@ export function findSelectionAtStart(node, path = [], text) {
 }
 
 export function findSelectionAtEnd(node, path = [], text) {
-  return findSelectionIn(node, path.slice(), node.maxOffset, -1, text)
+  return findSelectionIn(node, path.slice(), node.size, -1, text)
 }
 
 export function selectableNodeAbove(pm, dom, coords, liberal) {
   for (; dom && dom != pm.content; dom = dom.parentNode) {
-    if (dom.hasAttribute("pm-path")) {
-      let path = pathFromNode(dom)
+    if (dom.hasAttribute("pm-offset")) {
+      let path = pathFromDOM(dom)
       let node = pm.doc.path(path)
-      // Leaf nodes are implicitly clickable
       if (node.type.clicked) {
         let result = node.type.clicked(node, path, dom, coords)
         if (result) return result
       }
+      // Leaf nodes are implicitly clickable
       if ((liberal || node.type.contains == null) && node.type.selectable)
         return Pos.from(path)
       return null
-    } else if (dom.hasAttribute("pm-span-atom")) {
-      let path = pathFromNode(dom.parentNode)
-      let parent = pm.doc.path(path), span = parseSpan(dom.getAttribute("pm-span"))
-      let node = parent.childAfter(span.from).node
-      return node.type.selectable ? new Pos(path, span.from) : null
     }
   }
 }
@@ -606,6 +631,7 @@ export function verticalMotionLeavesTextblock(pm, pos, dir) {
   let dom = resolvePath(pm.content, pos.path)
   let coords = coordsAtPos(pm, pos)
   for (let child = dom.firstChild; child; child = child.nextSibling) {
+    if (child.nodeType != 1) continue
     let boxes = child.getClientRects()
     for (let i = 0; i < boxes.length; i++) {
       let box = boxes[i]

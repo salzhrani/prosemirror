@@ -1,4 +1,4 @@
-import {Pos, spanStylesAt} from "../model"
+import {Pos} from "../model"
 import {Keymap} from "../edit"
 
 export function addInputRules(pm, rules) {
@@ -72,9 +72,9 @@ class InputRules {
         if (typeof rule.handler == "string") {
           let offset = pos.offset - (match[1] || match[0]).length
           let start = new Pos(pos.path, offset)
-          let styles = spanStylesAt(this.pm.doc, pos)
+          let marks = this.pm.doc.marksAt(pos)
           this.pm.tr.delete(start, pos)
-                    .insert(start, this.pm.schema.text(rule.handler, styles))
+                    .insert(start, this.pm.schema.text(rule.handler, marks))
                     .apply()
         } else {
           rule.handler(this.pm, match, pos)
@@ -99,15 +99,10 @@ function getContext(doc, pos) {
   let parent = doc.path(pos.path)
   let isCode = parent.type.isCode
   let textBefore = ""
-  for (let offset = 0, i = 0; offset < pos.offset;) {
-    let child = parent.child(i++), size = child.offset
-    textBefore += offset + size > pos.offset ? child.text.slice(0, pos.offset - offset) : child.text
-    if (offset + size >= pos.offset) {
-      if (child.styles.some(st => st.type.isCode))
-        isCode = true
-      break
-    }
-    offset += size
+  for (let i = parent.iter(0, pos.offset), child; child = i.next().value;) {
+    if (child.isText) textBefore += child.text
+    else textBefore = ""
+    if (i.atEnd() && child.marks.some(st => st.type.isCode)) isCode = true
   }
   return {textBefore, isCode}
 }

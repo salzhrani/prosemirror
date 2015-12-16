@@ -1,12 +1,13 @@
-import {Pos, spanStylesAt} from "../model"
+import {Pos} from "../model"
 
 import {fromHTML} from "../parse/dom"
+import {fromText} from "../parse/text"
 import {elt} from "../dom"
 import {toHTML} from "../serialize/dom"
 import {toText} from "../serialize/text"
-import {knownSource, convertFrom} from "../parse"
+import {knownSource, parseFrom} from "../parse"
 
-import {isModifierKey, lookupKey, keyName} from "./keys"
+import {isModifierKey, keyName} from "./keys"
 import {captureKeys} from "./capturekeys"
 import {browser, addClass, rmClass} from "../dom"
 import {applyDOMChange, textContext, textInContext} from "./domchange"
@@ -37,7 +38,7 @@ export class Input {
 
     this.keymaps = []
 
-    this.storedStyles = null
+    this.storedMarks = null
 
     this.dropTarget = pm.wrapper.appendChild(elt("div", {class: "ProseMirror-drop-target"}))
 
@@ -46,7 +47,7 @@ export class Input {
       pm.content.addEventListener(event, e => handler(pm, e))
     }
 
-    pm.on("selectionChange", () => this.storedStyles = null)
+    pm.on("selectionChange", () => this.storedMarks = null)
   }
 
   maybeAbortComposition() {
@@ -93,6 +94,10 @@ export function dispatchKey(pm, name, e) {
   }
 
   let handle = function(bound) {
+    if (bound === false) return "nothing"
+    if (bound == "...") return "multi"
+    if (bound == null) return false
+
     let result = false
     if (Array.isArray(bound)) {
       for (let i = 0; result === false && i < bound.length; i++)
@@ -102,14 +107,14 @@ export function dispatchKey(pm, name, e) {
     } else {
       result = bound(pm)
     }
-    return result !== false
+    return result == false ? false : "handled"
   }
 
   let result
   for (let i = 0; !result && i < pm.input.keymaps.length; i++)
-    result = lookupKey(name, pm.input.keymaps[i].map, handle, pm)
+    result = handle(pm.input.keymaps[i].map.lookup(name, pm))
   if (!result)
-    result = lookupKey(name, pm.options.keymap, handle, pm) || lookupKey(name, captureKeys, handle, pm)
+    result = handle(pm.options.keymap.lookup(name, pm)) || handle(captureKeys.lookup(name))
 
   // If the key should be used in sequence with the next key, store the keyname internally.
   if (result == "multi")
@@ -139,10 +144,12 @@ handlers.keyup = (pm, e) => {
 
 function inputText(pm, range, text) {
   if (range.empty && !text) return false
-  let styles = pm.input.storedStyles || spanStylesAt(pm.doc, range.from)
+  let marks = pm.input.storedMarks || pm.doc.marksAt(range.from)
   let tr = pm.tr
-  tr.replaceWith(range.from, range.to, pm.schema.text(text, styles)).apply()
+  tr.replaceWith(range.from, range.to, pm.schema.text(text, marks)).apply()
   pm.scrollIntoView()
+  // :: () #path=ProseMirror#events#textInput
+  // Fired when the user types text into the editor.
   pm.signal("textInput", text)
 }
 
@@ -186,21 +193,24 @@ handlers.mousedown = (pm, e) => {
   lastClick = now
   if (pm.input.shiftKey || multi) return
 
-  let x = e.clientX, y = e.clientY
-  let done = () => {
+  let x = e.clientX, y = e.clientY, moved = false
+  let up = () => {
     removeEventListener("mouseup", up)
     removeEventListener("mousemove", move)
-  }
-  let up = () => {
-    done()
-    let pos = selectableNodeAbove(pm, e.target, {left: e.clientX, top: e.clientY})
-    if (pos) {
-      pm.setNodeSelection(pos)
-      pm.focus()
+    if (moved) {
+      pm.sel.pollForUpdate()
+    } else {
+      let pos = selectableNodeAbove(pm, e.target, {left: e.clientX, top: e.clientY})
+      if (pos) {
+        pm.setNodeSelection(pos)
+        pm.focus()
+      }
     }
   }
   let move = e => {
-    if (Math.abs(x - e.clientX) > 4 || Math.abs(y - e.clientY) > 4) done()
+    if (!moved && (Math.abs(x - e.clientX) > 4 || Math.abs(y - e.clientY) > 4))
+      moved = true
+    pm.sel.pollForUpdate()
   }
   addEventListener("mouseup", up)
   addEventListener("mousemove", move)
@@ -208,10 +218,6 @@ handlers.mousedown = (pm, e) => {
 
 handlers.touchdown = pm => {
   pm.sel.pollForUpdate()
-}
-
-handlers.mousemove = (pm, e) => {
-  if (e.which || e.button) pm.sel.pollForUpdate()
 }
 
 /**
@@ -270,7 +276,7 @@ function finishComposing(pm) {
   pm.ensureOperation()
   pm.input.composing = null
   if (text != info.data) inputText(pm, info.range, text)
-  if (range && !range.eq(pm.sel.range)) pm.setSelection(range)
+  if (range && !range.eq(pm.sel.range)) pm.setSelectionDirect(range)
 }
 
 handlers.input = (pm) => {
@@ -314,15 +320,13 @@ handlers.paste = (pm, e) => {
     e.preventDefault()
     let doc, from, to
     if (pm.input.shiftKey && txt) {
-      let paragraphs = txt.split(/[\r\n]+/)
-      let styles = spanStylesAt(pm.doc, sel.from)
-      doc = pm.schema.node("doc", null, paragraphs.map(s => pm.schema.node("paragraph", null, [pm.schema.text(s, styles)])))
+      doc = fromText(pm.schema, txt)
     } else if (lastCopied && (lastCopied.html == html || lastCopied.text == txt)) {
       ;({doc, from, to} = lastCopied)
     } else if (html) {
       doc = fromHTML(pm.schema, html)
     } else {
-      doc = convertFrom(pm.schema, txt, knownSource("markdown") ? "markdown" : "text")
+      doc = parseFrom(pm.schema, txt, knownSource("markdown") ? "markdown" : "text")
     }
     pm.tr.replace(sel.from, sel.to, doc, from || findSelectionAtStart(doc).from,
                   to || findSelectionAtEnd(doc).to).apply()
@@ -370,7 +374,7 @@ handlers.drop = (pm, e) => {
   if (html = e.dataTransfer.getData("text/html"))
     doc = fromHTML(pm.schema, html, {document})
   else if (txt = e.dataTransfer.getData("text/plain"))
-    doc = convertFrom(pm.schema, txt, knownSource("markdown") ? "markdown" : "text")
+    doc = parseFrom(pm.schema, txt, knownSource("markdown") ? "markdown" : "text")
 
   if (doc) {
     e.preventDefault()
@@ -382,17 +386,21 @@ handlers.drop = (pm, e) => {
       insertPos = tr.map(insertPos).pos
     }
     tr.replace(insertPos, insertPos, doc, findSelectionAtStart(doc).from, findSelectionAtEnd(doc).to).apply()
-    pm.setSelection(insertPos, tr.map(insertPos).pos)
+    pm.setTextSelection(insertPos, tr.map(insertPos).pos)
     pm.focus()
   }
 }
 
 handlers.focus = pm => {
   addClass(pm.wrapper, "ProseMirror-focused")
+  // :: () #path=ProseMirror#events#focus
+  // Fired when the editor gains focus.
   pm.signal("focus")
 }
 
 handlers.blur = pm => {
   rmClass(pm.wrapper, "ProseMirror-focused")
+  // :: () #path=ProseMirror#events#blur
+  // Fired when the editor loses focus.
   pm.signal("blur")
 }

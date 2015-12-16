@@ -4,21 +4,18 @@ import {cmp, cmpNode, gt, cmpStr, P} from "../cmp"
 
 import {Pos} from "../../src/model"
 
-function allPositions(doc, block) {
+function allPositions(doc) {
   let found = [], path = []
   function scan(node) {
-    let p = path.slice()
     if (node.isTextblock) {
-      let size = node.maxOffset
-      for (let i = 0; i <= size; i++) found.push(new Pos(p, i))
-    } else if (node.type.contains) {
-      for (let i = 0;; i++) {
-        if (!block) found.push(new Pos(p, i))
-        if (i == node.length) break
-        path.push(i)
-        scan(node.child(i))
+      let p = path.slice()
+      for (let i = 0; i <= node.size; i++) found.push(new Pos(p, i))
+    } else {
+      node.forEach((child, offset) => {
+        path.push(offset)
+        scan(child)
         path.pop()
-      }
+      })
     }
   }
   scan(doc)
@@ -86,7 +83,7 @@ function getSel() {
 
 test("set", pm => {
   function test(pos, node, offset) {
-    pm.setSelection(pos)
+    pm.setTextSelection(pos)
     pm.flush()
     let sel = getSel()
     cmp(sel.node, node, pos)
@@ -107,10 +104,10 @@ test("set", pm => {
 test("change_event", pm => {
   let received = 0
   pm.on("selectionChange", () => ++received)
-  pm.setSelection(P(0, 1))
-  pm.setSelection(P(0, 1))
+  pm.setTextSelection(P(0, 1))
+  pm.setTextSelection(P(0, 1))
   cmp(received, 1, "changed")
-  pm.setSelection(P(0, 0))
+  pm.setTextSelection(P(0, 0))
   cmp(received, 2, "changed back")
   pm.setOption("doc", doc(p("hi")))
   cmp(received, 2, "new doc")
@@ -144,12 +141,12 @@ test("coords_order", pm => {
 test("coords_cornercases", pm => {
   pm.markRange(P(0, 1), P(0, 4), {className: "foo"})
   pm.markRange(P(0, 6), P(0, 12), {className: "foo"})
-  let positions = allPositions(pm.doc, true)
+  let positions = allPositions(pm.doc)
   for (let i = 0; i < positions.length; i++) {
     let coords = pm.coordsAtPos(positions[i])
     let pos = pm.posAtCoords(coords)
     cmpStr(pos, positions[i])
-    pm.setSelection(pos)
+    pm.setTextSelection(pos)
     pm.flush()
   }
 }, {
@@ -181,11 +178,11 @@ test("follow_change", pm => {
 })
 
 test("replace_with_block", pm => {
-  pm.setSelection(P(0, 3))
+  pm.setTextSelection(P(0, 3))
   pm.tr.replaceSelection(pm.schema.node("horizontal_rule")).apply()
   cmpNode(pm.doc, doc(p("foo"), hr, p("bar")), "split paragraph")
   cmpStr(pm.selection.head, P(2, 0), "moved after rule")
-  pm.setSelection(P(2, 3))
+  pm.setTextSelection(P(2, 3))
   pm.tr.replaceSelection(pm.schema.node("horizontal_rule")).apply()
   cmpNode(pm.doc, doc(p("foo"), hr, p("bar"), hr), "inserted after")
   cmpStr(pm.selection.head, P(2, 3), "stayed in paragraph")

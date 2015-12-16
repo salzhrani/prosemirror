@@ -1,42 +1,36 @@
 import {Text, BlockQuote, OrderedList, BulletList, ListItem,
         HorizontalRule, Paragraph, Heading, CodeBlock, Image, HardBreak,
-        EmStyle, StrongStyle, LinkStyle, CodeStyle} from "../model"
+        EmMark, StrongMark, LinkMark, CodeMark} from "../model"
 import {defineTarget} from "./index"
 
+// :: (Node) → string
+// Serialize the content of the given node to [CommonMark](http://commonmark.org/).
+//
+// To define serialization behavior for your own [node
+// types](#NodeType), give them a `serializeMarkDown` method. It will
+// be called with a `MarkdownSerializer` and a `Node`, and should
+// update the serializer's state to add the content of the node.
+//
+// [Mark types](#MarkType) can define `openMarkdown` and
+// `closeMarkdown` properties, which provide the markup text that
+// marked content should be wrapped in. They may hold either a string
+// or a function from a `MarkdownSerializer` and a `Mark` to a string.
 export function toMarkdown(doc) {
-  let state = new State()
-  state.renderNodes(doc.children)
+  let state = new MarkdownSerializer
+  state.renderContent(doc)
   return state.out
 }
 
 defineTarget("markdown", toMarkdown)
 
-function esc(str, startOfLine) {
-  str = str.replace(/[`*\\~+\[\]]/g, "\\$&")
-  if (startOfLine) str = str.replace(/^[:#-]/, "\\$&")
-  return str
-}
-
-function quote(str) {
-  var wrap = str.indexOf('"') == -1 ? '""' : str.indexOf("'") == -1 ? "''" : "()"
-  return wrap[0] + str + wrap[1]
-}
-
-function rep(str, n) {
-  let out = ""
-  for (let i = 0; i < n; i++) out += str
-  return out
-}
-
-class State {
+// ;; #toc=false This is an object used to track state and expose
+// methods related to markdown serialization. Instances are passed to
+// node and mark serialization methods (see `toMarkdown`).
+class MarkdownSerializer {
   constructor() {
     this.delim = this.out = ""
     this.closed = false
     this.inTightList = false
-  }
-
-  closeBlock(node) {
-    this.closed = node
   }
 
   flushClose(size) {
@@ -54,6 +48,11 @@ class State {
     }
   }
 
+  // :: (string, ?string, Node, ())
+  // Render a block, prefixing each line with `delim`, and the first
+  // line in `firstDelim`. `node` should be the node that is closed at
+  // the end of the block, and `f` is a function that renders the
+  // content of the block.
   wrapBlock(delim, firstDelim, node, f) {
     let old = this.delim
     this.write(firstDelim || delim)
@@ -67,67 +66,88 @@ class State {
     return /(^|\n)$/.test(this.out)
   }
 
-  write(add) {
+  // :: ()
+  // Ensure the current content ends with a newline.
+  ensureNewLine() {
+    if (!this.atBlank()) this.out += "\n"
+  }
+
+  // :: (?string)
+  // Prepare the state for writing output (closing closed paragraphs,
+  // adding delimiters, and so on), and then optionally add content
+  // (unescaped) to the output.
+  write(content) {
     this.flushClose()
     if (this.delim && this.atBlank())
       this.out += this.delim
-    if (add) this.out += add
+    if (content) this.out += content
   }
 
+  // :: (Node)
+  // Close the block for the given node.
+  closeBlock(node) {
+    this.closed = node
+  }
+
+  // :: (string, ?bool)
+  // Add the given text to the document. When escape is not `false`,
+  // it will be escaped.
   text(text, escape) {
     let lines = text.split("\n")
     for (let i = 0; i < lines.length; i++) {
       var startOfLine = this.atBlank() || this.closed
       this.write()
-      this.out += escape !== false ? esc(lines[i], startOfLine) : lines[i]
+      this.out += escape !== false ? this.esc(lines[i], startOfLine) : lines[i]
       if (i != lines.length - 1) this.out += "\n"
     }
   }
 
-  ensureNewLine() {
-    if (!this.atBlank()) this.out += "\n"
-  }
-
+  // :: (Node)
+  // Render the given node as a block.
   render(node) {
     node.type.serializeMarkdown(this, node)
   }
 
-  renderNodes(nodes) {
-    for (let i = 0; i < nodes.length; i++)
-      this.render(nodes[i])
+  // :: (Node)
+  // Render the contents of `parent` as block nodes.
+  renderContent(parent) {
+    parent.forEach(child => this.render(child))
   }
 
-  renderInline(nodes) {
+  // :: (Node)
+  // Render the contents of `parent` as inline content.
+  renderInline(parent) {
     let stack = []
-    for (let i = 0; i <= nodes.length; i++) {
-      let node = nodes[i]
-      let styles = node ? node.styles.slice() : []
+    let progress = node => {
+      let marks = node ? node.marks.slice() : []
       if (stack.length && stack[stack.length - 1].type == "code" &&
-          (!styles.length || styles[styles.length - 1].type != "code")) {
+          (!marks.length || marks[marks.length - 1].type != "code")) {
         this.text("`", false)
         stack.pop()
       }
       for (let j = 0; j < stack.length; j++) {
         let cur = stack[j], found = false
-        for (let k = 0; k < styles.length; k++) {
-          if (styles[k].eq(stack[j])) {
-            styles.splice(k, 1)
+        for (let k = 0; k < marks.length; k++) {
+          if (marks[k].eq(stack[j])) {
+            marks.splice(k, 1)
             found = true
             break
           }
         }
         if (!found) {
-          this.text(styleString(cur, false), false)
+          this.text(this.markString(cur, false), false)
           stack.splice(j--, 1)
         }
       }
-      for (let j = 0; j < styles.length; j++) {
-        let cur = styles[j]
+      for (let j = 0; j < marks.length; j++) {
+        let cur = marks[j]
         stack.push(cur)
-        this.text(styleString(cur, true), false)
+        this.text(this.markString(cur, true), false)
       }
       if (node) this.render(node)
     }
+    parent.forEach(progress)
+    progress(null)
   }
 
   renderList(node, delim, firstDelim) {
@@ -138,19 +158,46 @@ class State {
 
     let prevTight = this.inTightList
     this.inTightList = node.attrs.tight
-    for (let i = 0; i < node.length; i++) {
-      if (i && node.attrs.tight) this.flushClose(1)
-      let item = node.child(i)
-      this.wrapBlock(delim, firstDelim(i), node, () => this.render(item))
+    for (let i = node.iter(), n = 0, item; item = i.next().value; n++) {
+      if (n && node.attrs.tight) this.flushClose(1)
+      this.wrapBlock(delim, firstDelim(n), node, () => this.render(item))
     }
     this.inTightList = prevTight
+  }
+
+  // :: (string, ?bool) → string
+  // Escape the given string so that it can safely appear in Markdown
+  // content. If `startOfLine` is true, also escape characters that
+  // has special meaning only at the start of the line.
+  esc(str, startOfLine) {
+    str = str.replace(/[`*\\~+\[\]]/g, "\\$&")
+    if (startOfLine) str = str.replace(/^[:#-]/, "\\$&")
+    return str
+  }
+
+  quote(str) {
+    var wrap = str.indexOf('"') == -1 ? '""' : str.indexOf("'") == -1 ? "''" : "()"
+    return wrap[0] + str + wrap[1]
+  }
+
+  // :: (string, number) → string
+  // Repeat the given string `n` times.
+  repeat(str, n) {
+    let out = ""
+    for (let i = 0; i < n; i++) out += str
+    return out
+  }
+
+  markString(mark, open) {
+    let value = open ? mark.type.openMarkdown : mark.type.closeMarkdown
+    return typeof value == "string" ? value : value(this, mark)
   }
 }
 
 function def(cls, method) { cls.prototype.serializeMarkdown = method }
 
 def(BlockQuote, (state, node) => {
-  state.wrapBlock("> ", null, node, () => state.renderNodes(node.children))
+  state.wrapBlock("> ", null, node, () => state.renderContent(node))
 })
 
 def(CodeBlock, (state, node) => {
@@ -166,8 +213,8 @@ def(CodeBlock, (state, node) => {
 })
 
 def(Heading, (state, node) => {
-  state.write(rep("#", node.attrs.level) + " ")
-  state.renderInline(node.children)
+  state.write(state.repeat("#", node.attrs.level) + " ")
+  state.renderInline(node)
   state.closeBlock(node)
 })
 
@@ -182,49 +229,44 @@ def(BulletList, (state, node) => {
 
 def(OrderedList, (state, node) => {
   let start = Number(node.attrs.order || 1)
-  let maxW = String(start + node.length - 1).length
-  let space = rep(" ", maxW + 2)
+  let maxW = String(start + node.size - 1).length
+  let space = state.repeat(" ", maxW + 2)
   state.renderList(node, space, i => {
     let nStr = String(start + i)
-    return rep(" ", maxW - nStr.length) + nStr + ". "
+    return state.repeat(" ", maxW - nStr.length) + nStr + ". "
   })
 })
 
-def(ListItem, (state, node) => state.renderNodes(node.children))
+def(ListItem, (state, node) => state.renderContent(node))
 
 def(Paragraph, (state, node) => {
-  state.renderInline(node.children)
+  state.renderInline(node)
   state.closeBlock(node)
 })
 
 // Inline nodes
 
 def(Image, (state, node) => {
-  state.write("![" + esc(node.attrs.alt || "") + "](" + esc(node.attrs.src) +
-              (node.attrs.title ? " " + quote(node.attrs.title) : "") + ")")
+  state.write("![" + state.esc(node.attrs.alt || "") + "](" + state.esc(node.attrs.src) +
+              (node.attrs.title ? " " + state.quote(node.attrs.title) : "") + ")")
 })
 
 def(HardBreak, state => state.write("\\\n"))
 
 def(Text, (state, node) => state.text(node.text))
 
-// Styles
+// Marks
 
-function styleString(style, open) {
-  let value = open ? style.type.openMarkdownStyle : style.type.closeMarkdownStyle
-  return typeof value == "string" ? value : value(style)
+function defMark(mark, open, close) {
+  mark.prototype.openMarkdown = open
+  mark.prototype.closeMarkdown = close
 }
 
-function defStyle(style, open, close) {
-  style.prototype.openMarkdownStyle = open
-  style.prototype.closeMarkdownStyle = close
-}
+defMark(EmMark, "*", "*")
 
-defStyle(EmStyle, "*", "*")
+defMark(StrongMark, "**", "**")
 
-defStyle(StrongStyle, "**", "**")
+defMark(LinkMark, "[",
+        (state, mark) => "](" + state.esc(mark.attrs.href) + (mark.attrs.title ? " " + state.quote(mark.attrs.title) : "") + ")")
 
-defStyle(LinkStyle, "[",
-         style => "](" + esc(style.attrs.href) + (style.attrs.title ? " " + quote(style.attrs.title) : "") + ")")
-
-defStyle(CodeStyle, "`", "`")
+defMark(CodeMark, "`", "`")

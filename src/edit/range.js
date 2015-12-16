@@ -1,14 +1,26 @@
-import {eventMixin} from "./event"
+import {eventMixin} from "../util/event"
 
+// ;; A [marked range](#ProseMirror.markRange). Includes the methods
+// from the [event mixin](#EventMixin).
 export class MarkedRange {
   constructor(from, to, options) {
     this.options = options || {}
+    // :: ?Pos
+    // The current start position of the range. Updated whenever the
+    // editor's document is changed. Set to `null` when the marked
+    // range is [removed](#ProseMirror.removeRange).
     this.from = from
+    // :: ?Pos
+    // The current end position of the range. Updated whenever the
+    // editor's document is changed. Set to `null` when the marked
+    // range is [removed](#ProseMirror.removeRange).
     this.to = to
   }
 
-  clear() {
-    this.signal("removed", this.from)
+  remove() {
+    // :: (from: Pos, to: Pos) #path=MarkedRange#events#removed
+    // Signalled when the marked range is removed from the editor.
+    this.signal("removed", this.from, this.to.max(this.from))
     this.from = this.to = null
   }
 }
@@ -86,7 +98,7 @@ export class RangeStore {
       this.sorted.remove(range.from, range)
       this.sorted.remove(range.to, range)
       this.pm.markRangeDirty(range)
-      range.clear()
+      range.remove()
     }
   }
 
@@ -96,7 +108,7 @@ export class RangeStore {
       range.from = mapping.map(range.from, range.options.inclusiveLeft ? -1 : 1).pos
       range.to = mapping.map(range.to, range.options.inclusiveRight ? 1 : -1).pos
       let diff = range.from.cmp(range.to)
-      if (range.options.clearWhenEmpty !== false && diff >= 0) {
+      if (range.options.removeWhenEmpty !== false && diff >= 0) {
         this.removeRange(range)
         i--
       } else if (diff > 0) {

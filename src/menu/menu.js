@@ -118,7 +118,7 @@ function renderIcon(command, menu) {
 
 function resolveIcon(pm, command) {
   for (;;) {
-    let icon = command.info.icon
+    let icon = command.spec.icon
     if (!icon) break
     if (icon.from) {
       command = pm.commands[icon.from]
@@ -127,7 +127,7 @@ function resolveIcon(pm, command) {
       return getIcon(command.name, icon)
     }
   }
-  return elt("span", null, "?") // FIXME saner default?
+  return getIcon("default", {text: "✘"})
 }
 
 function renderSelect(item, menu) {
@@ -173,20 +173,21 @@ export function showSelectMenu(pm, item, dom) {
 }
 
 function renderItem(item, menu) {
-  if (item.display == "icon") return renderIcon(item, menu)
-  else if (item.display == "select") return renderSelect(item, menu)
-  else if (!item.display) throw new Error("Command " + item.name + " can not be shown in a menu")
-  else return item.display(menu)
+  var display = item.display || item.spec.display || "icon"
+  if (display == "icon") return renderIcon(item, menu)
+  else if (display == "select") return renderSelect(item, menu)
+  else if (!display) throw new Error("Command " + item.name + " can not be shown in a menu")
+  else return display.call(item, menu)
 }
 
 function buildParamForm(pm, command) {
-  let prefill = command.info.prefillParams && command.info.prefillParams(pm)
+  let prefill = command.spec.prefillParams && command.spec.prefillParams(pm)
   let fields = command.params.map((param, i) => {
     let field, name = "field_" + i
     let val = prefill ? prefill[i] : param.default || ""
     if (param.type == "text")
       field = elt("input", {name, type: "text",
-                            placeholder: param.name,
+                            placeholder: param.label,
                             value: val,
                             autocomplete: "off"})
     else if (param.type == "select")
@@ -268,8 +269,8 @@ export function commandGroups(pm, ...names) {
     let found = []
     for (let name in pm.commands) {
       let cmd = pm.commands[name]
-      if (cmd.info.menuGroup && cmd.info.menuGroup == group)
-        sortedInsert(found, cmd, (a, b) => (a.info.menuRank || 50) - (b.info.menuRank || 50))
+      if (cmd.spec.menuGroup && cmd.spec.menuGroup == group)
+        sortedInsert(found, cmd, (a, b) => (a.spec.menuRank || 50) - (b.spec.menuRank || 50))
     }
     return found
   })
