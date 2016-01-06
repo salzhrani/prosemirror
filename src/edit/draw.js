@@ -1,5 +1,5 @@
 import {Pos} from "../model"
-import {toDOM, renderNodeToDOM} from "../serialize/dom"
+import {toDOM, nodeToDOM} from "../format"
 import {elt} from "../dom"
 
 import {DIRTY_REDRAW} from "./main"
@@ -9,7 +9,7 @@ import {DIRTY_REDRAW} from "./main"
 function options(path, ranges) {
   return {
     onRender(node, dom, offset) {
-      if (node.type.contains == null) {
+      if (!node.isText && node.type.contains == null) {
         dom.contentEditable = false
         if (node.isBlock) dom.setAttribute("pm-leaf", "true")
       }
@@ -77,7 +77,7 @@ export function draw(pm, doc) {
 
 function adjustTrailingHacks(dom, node) {
   let needs = node.size == 0 || node.lastChild.type.isBR ? "br"
-      : node.lastChild.type.contains == null ? "text" : null
+      : !node.lastChild.isText && node.lastChild.type.contains == null ? "text" : null
   let last = dom.lastChild
   let has = !last || last.nodeType != 1 || !last.hasAttribute("pm-ignore") ? null
       : last.nodeName == "BR" ? "br" : "text"
@@ -123,9 +123,17 @@ export function redraw(pm, dirty, doc, prev) {
         reuseDOM = true
       } else if (pChild && !child.isText && child.sameMarkup(pChild) && dirty.get(pChild) != DIRTY_REDRAW) {
         reuseDOM = true
-        scan(domPos, child, pChild)
+        if (pChild.type.contains) {
+          let contentNode = domPos
+          for (;;) {
+            let first = contentNode.firstChild
+            if (!first || first.hasAttribute("pm-ignore") || first.hasAttribute("pm-offset")) break
+            contentNode = first
+          }
+          scan(contentNode, child, pChild)
+        }
       } else {
-        let rendered = renderNodeToDOM(child, opts, offset)
+        let rendered = nodeToDOM(child, opts, offset)
         dom.insertBefore(rendered, domPos)
         reuseDOM = false
       }

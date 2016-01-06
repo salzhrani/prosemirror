@@ -1,25 +1,53 @@
 import {Pos} from "../model"
 import {Keymap} from "../edit"
 
-export function addInputRules(pm, rules) {
+// :: (ProseMirror, InputRule)
+// Add the given [input rule](#InputRule) to an editor. From now on,
+// whenever the rule's pattern is typed, its handler is activated.
+//
+// Note that the effect of an input rule can be canceled by pressing
+// Backspace right after it happens.
+export function addInputRule(pm, rule) {
   if (!pm.mod.interpretInput)
     pm.mod.interpretInput = new InputRules(pm)
-  pm.mod.interpretInput.addRules(rules)
+  pm.mod.interpretInput.addRule(rule)
 }
 
-export function removeInputRules(pm, rules) {
+// :: (ProseMirror, string)
+// Remove the input rule with the given name (added earlier with
+// `addInputRule`) from the editor.
+export function removeInputRule(pm, name) {
   let ii = pm.mod.interpretInput
   if (!ii) return
-  ii.removeRules(rules)
+  ii.removeRule(name)
   if (ii.rules.length == 0) {
     ii.unregister()
     pm.mod.interpretInput = null
   }
 }
 
-export class Rule {
-  constructor(lastChar, match, handler) {
-    this.lastChar = lastChar
+// ;; Input rules are regular expressions describing a piece of text
+// that, when typed, causes something to happen. This might be
+// changing two dashes into an emdash, wrapping a paragraph starting
+// with `"> "` into a blockquote, or something entirely different.
+export class InputRule {
+  // :: (string, RegExp, ?string, union<string, (ProseMirror, [string], Pos)>)
+  // Create an input rule. Its name is used to identify it (to disable
+  // it). The rule applies when the user typed something and the text
+  // directly in front of the cursor matches `match`, which should
+  // probably end with `$`. You can optionally provide a filter, which
+  // should be a single character that always appears at the end of
+  // the match, and will be used to only apply the rule when there's
+  // an actual chance of it succeeding.
+  //
+  // The `handler` can be a string, in which case the matched text
+  // will simply be replaced by that string, or a function, which will
+  // be called with the match array produced by
+  // [`RegExp.exec`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/RegExp/exec),
+  // and should produce the effect of the rule.
+  constructor(name, match, filter, handler) {
+    this.name = name
+    this.filter = filter
     this.match = match
     this.handler = handler
   }
@@ -42,14 +70,16 @@ class InputRules {
     this.pm.removeKeymap("inputRules")
   }
 
-  addRules(rules) {
-    this.rules = this.rules.concat(rules)
+  addRule(rule) {
+    this.rules.push(rule)
   }
 
-  removeRules(rules) {
-    for (let i = 0; i < rules.length; i++) {
-      let found = this.rules.indexOf(rules[i])
-      if (found > -1) this.rules.splice(found, 1)
+  removeRule(name) {
+    for (let i = 0; i < this.rules.length; i++) {
+      if (this.rules[i].name == name) {
+        this.rules.splice(i, 1)
+        return true
+      }
     }
   }
 
@@ -62,7 +92,7 @@ class InputRules {
 
     for (let i = 0; i < this.rules.length; i++) {
       let rule = this.rules[i], match
-      if (rule.lastChar && rule.lastChar != lastCh) continue
+      if (rule.filter && rule.filter != lastCh) continue
       if (textBefore == null) {
         ;({textBefore, isCode} = getContext(this.pm.doc, pos))
         if (isCode) return

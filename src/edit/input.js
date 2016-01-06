@@ -1,30 +1,25 @@
 import {Pos} from "../model"
 
-import {fromHTML} from "../parse/dom"
-import {fromText} from "../parse/text"
+import {knownSource, parseFrom, fromHTML, fromText, toHTML, toText} from "../format"
 import {elt} from "../dom"
-import {toHTML} from "../serialize/dom"
-import {toText} from "../serialize/text"
-import {knownSource, parseFrom} from "../parse"
 
 import {isModifierKey, keyName} from "./keys"
 import {captureKeys} from "./capturekeys"
 import {browser, addClass, rmClass} from "../dom"
 import {applyDOMChange, textContext, textInContext} from "./domchange"
 import {TextSelection, coordsAtPos, rangeFromDOMLoose, selectableNodeAbove,
-        findSelectionAtStart, findSelectionAtEnd} from "./selection"
+        findSelectionAtStart, findSelectionAtEnd, handleNodeClick} from "./selection"
 
 let stopSeq = null
 
-/**
- * A collection of DOM events that occur within the editor, and callback functions
- * to invoke when the event fires.
- */
+// A collection of DOM events that occur within the editor, and callback functions
+// to invoke when the event fires.
 const handlers = {}
 
 export class Input {
   constructor(pm) {
     this.pm = pm
+    this.baseKeymap = null
 
     this.keySeq = null
 
@@ -37,6 +32,7 @@ export class Input {
     this.draggingFrom = false
 
     this.keymaps = []
+    this.defaultKeymap = null
 
     this.storedMarks = null
 
@@ -69,17 +65,8 @@ export class Input {
   }
 }
 
-/**
- * Dispatch a key press to the internal keymaps, which will override the default
- * DOM behavior.
- *
- * @param  {ProseMirror}   pm The editor instance.
- * @param  {string}        name The name of the key pressed.
- * @param  {KeyboardEvent} e
- * @return {string} If the key name has a mapping and the callback is invoked ("handled"),
- *                  if the key name needs to be combined in sequence with the next key ("multi"),
- *                  if there is no mapping ("nothing").
- */
+// Dispatch a key press to the internal keymaps, which will override the default
+// DOM behavior.
 export function dispatchKey(pm, name, e) {
   let seq = pm.input.keySeq
   // If the previous key should be used in sequence with this one, modify the name accordingly.
@@ -114,7 +101,7 @@ export function dispatchKey(pm, name, e) {
   for (let i = 0; !result && i < pm.input.keymaps.length; i++)
     result = handle(pm.input.keymaps[i].map.lookup(name, pm))
   if (!result)
-    result = handle(pm.options.keymap.lookup(name, pm)) || handle(captureKeys.lookup(name))
+    result = handle(pm.input.baseKeymap.lookup(name, pm)) || handle(captureKeys.lookup(name))
 
   // If the key should be used in sequence with the next key, store the keyname internally.
   if (result == "multi")
@@ -181,7 +168,7 @@ function selectClickedNode(pm, e) {
   e.preventDefault()
 }
 
-let lastClick = 0
+let lastClick = 0, oneButLastClick = 0
 
 handlers.mousedown = (pm, e) => {
   if (e.ctrlKey)
@@ -189,15 +176,34 @@ handlers.mousedown = (pm, e) => {
 
   pm.sel.pollForUpdate()
 
-  let now = Date.now(), multi = now - lastClick < 500
+  let now = Date.now(), doubleClick = now - lastClick < 500, tripleClick = now - oneButLastClick < 600
+  oneButLastClick = lastClick
   lastClick = now
-  if (pm.input.shiftKey || multi) return
+  if (tripleClick) {
+    e.preventDefault()
+    let pos = selectableNodeAbove(pm, e.target, {left: e.clientX, top: e.clientY}, true)
+    if (pos) {
+      let node = pm.doc.nodeAfter(pos)
+      if (node.isBlock && !node.isTextblock) {
+        pm.setNodeSelection(pos)
+      } else {
+        let path = node.isInline ? pos.path : pos.toPath()
+        if (node.isInline) node = pm.doc.path(path)
+        pm.setTextSelection(new Pos(path, 0), new Pos(path, node.size))
+      }
+      pm.focus()
+    }
+    return
+  }
+  let leaveToBrowser = pm.input.shiftKey || doubleClick
 
-  let x = e.clientX, y = e.clientY, moved = false
+  let x = e.clientX, y = e.clientY
   let up = () => {
     removeEventListener("mouseup", up)
     removeEventListener("mousemove", move)
-    let pos = !moved && selectableNodeAbove(pm, e.target, {left: e.clientX, top: e.clientY})
+    if (handleNodeClick(pm, e)) return
+
+    let pos = !leaveToBrowser && selectableNodeAbove(pm, e.target, {left: e.clientX, top: e.clientY})
     if (pos) {
       pm.setNodeSelection(pos)
       pm.focus()
@@ -206,8 +212,8 @@ handlers.mousedown = (pm, e) => {
     }
   }
   let move = e => {
-    if (!moved && (Math.abs(x - e.clientX) > 4 || Math.abs(y - e.clientY) > 4))
-      moved = true
+    if (!leaveToBrowser && (Math.abs(x - e.clientX) > 4 || Math.abs(y - e.clientY) > 4))
+      leaveToBrowser = true
     pm.sel.pollForUpdate()
   }
   addEventListener("mouseup", up)
@@ -218,9 +224,7 @@ handlers.touchdown = pm => {
   pm.sel.pollForUpdate()
 }
 
-/**
- * A class to track state while creating a composed character.
- */
+// A class to track state while creating a composed character.
 class Composing {
   constructor(pm, data) {
     this.finished = false
@@ -285,6 +289,7 @@ handlers.input = (pm) => {
     return
   }
 
+  pm.sel.stopPollingForUpdate()
   applyDOMChange(pm)
   pm.scrollIntoView()
 }

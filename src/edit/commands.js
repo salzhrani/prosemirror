@@ -1,5 +1,5 @@
 import {HardBreak, BulletList, OrderedList, ListItem, BlockQuote, Heading, Paragraph, CodeBlock, HorizontalRule,
-        StrongMark, EmMark, CodeMark, LinkMark, Image, Pos} from "../model"
+        StrongMark, EmMark, CodeMark, LinkMark, Image, Pos, NodeType, MarkType} from "../model"
 import {joinPoint, joinableBlocks, canLift, canWrap} from "../transform"
 import {browser} from "../dom"
 import sortedInsert from "../util/sortedinsert"
@@ -8,25 +8,37 @@ import {charCategory, isExtendingChar} from "./char"
 import {Keymap} from "./keys"
 import {findSelectionFrom, verticalMotionLeavesTextblock, setDOMSelectionToPos, NodeSelection} from "./selection"
 
-const globalCommands = Object.create(null)
+const commands = Object.create(null)
+
 const paramHandlers = Object.create(null)
 
-const empty = []
-
-// FIXME document individual commands
+// :: (CommandSpec)
+// Define a globally available command. Note that
+// [namespaces](#namespace) can still be used to prevent the command
+// from showing up in editor where you don't want it to show up.
+export function defineCommand(spec) {
+  if (commands[spec.name])
+    throw new Error("Duplicate definition of command " + spec.name)
+  commands[spec.name] = spec
+}
 
 // ;; A command is a named piece of functionality that can be bound to
-// a key, shown in the menu, or otherwise exposed to the user. There
-// are two sources of commands: Global commands, registered with
-// `defineCommand`, are available everywhere. Commands associated with
-// [node](#NodeType) or [mark](#MarkType) types, registered by using
-// the types' [`register`](#NodeType.register) method with the string
-// `"command"`, are available only in editors whose schema contains
-// that node or mark type.
+// a key, shown in the menu, or otherwise exposed to the user.
+//
+// The commands available in a given editor are gathered from the
+// commands defined with `defineCommand`, and from
+// [specs](#CommandSpec) associated with node and mark types in the
+// editor's [schema](#Schema.registry). Use the
+// [`register`](#SchemaItem.register) method with `"command"` as the
+// name and a `CommandSpec` as value to associate a command with a
+// node or mark.
+//
+// This module defines a [bunch of commands](#edit_commands) in the
+// [default schema](#defaultSchema) and global command registry.
 export class Command {
-  constructor(spec, self) {
+  constructor(spec, self, name) {
     // :: string The name of the command.
-    this.name = spec.name
+    this.name = name || spec.name
     if (!this.name) throw new Error("Trying to define a command without a name")
     // :: CommandSpec The command's specifying object.
     this.spec = spec
@@ -85,6 +97,8 @@ export class Command {
   }
 }
 
+const empty = []
+
 // ;; #path=CommandSpec #kind=interface #toc=false
 // Commands are defined using objects that specify various aspects of
 // the command. The only properties that _must_ appear in a command
@@ -94,7 +108,9 @@ export class Command {
 // :: string #path=CommandSpec.name
 // The name of the command, which will be its key in
 // `ProseMirror.commands`, and the thing passed to
-// [`execCommand`](#ProseMirror.execCommand).
+// [`execCommand`](#ProseMirror.execCommand). Can be
+// [namespaced](#namespaces), (and probably should, for user-defined
+// commands).
 
 // :: string #path=CommandSpec.label
 // A user-facing label for the command. This will be used, among other
@@ -104,7 +120,7 @@ export class Command {
 // :: (pm: ProseMirror, ...params: [any]) → ?bool #path=CommandSpec.run
 // The function that executes the command. If the command has
 // [parameters](#CommandSpec.params), their values are passed as
-// arguments. For commands [registered](#NodeType.register) on node or
+// arguments. For commands [registered](#SchemaItem.register) on node or
 // mark types, `this` will be bound to the node or mark type when this
 // function is ran. Should return `false` when the command could not
 // be executed.
@@ -121,14 +137,23 @@ export class Command {
 // [active](#Command.active). `this` refers to the associated node or
 // mark type.
 
-// :: union<string, [string]> #path=CommandSpec.key
-// The default key binding or bindings for this command.
+// :: union<string, [string]> #path=CommandSpec.keys
+// The default key bindings for this command. May either be an array
+// of strings containing [key names](#FIXME), or an object with
+// optional `all`, `mac`, and `pc` properties, specifying arrays of
+// keys for different platforms.
 
-// :: union<string, [string]> #path=CommandSpec.pcKey
-// Default key binding or bindings specific to non-Mac platforms.
-
-// :: union<string, [string]> #path=CommandSpec.macKey
-// Default key binding or bindings specific to the Mac platform.
+// :: union<bool, Object> #path=CommandSpec.derive
+// [Mark](#MarkType) and [node](#NodeType) types often need to define
+// boilerplate commands. To reduce the amount of duplicated code, you
+// can derive such commands by setting the `derive` property to either
+// `true` or an object which is passed to the deriving function. If
+// this object has a `name` property, that is used, instead of the
+// command name, to pick a deriving function.
+//
+// For node types, you can derive `"insert"`, `"make"`, and `"wrap"`.
+//
+// For mark types, you can derive `"set"`, `"unset"`, and `"toggle"`.
 
 // FIXME document menu and icon properties
 
@@ -146,12 +171,6 @@ export class Command {
 // :: any #path=CommandParam.default
 // A default value for the parameter.
 
-// :: (CommandSpec)
-// Define a global (not node- or mark-specific) command.
-export function defineCommand(spec) {
-  globalCommands[spec.name] = new Command(spec)
-}
-
 // :: (string, (pm: ProseMirror, cmd: Command, callback: (?[any])))
 // Register a parameter handler, which is a function that prompts the
 // user to enter values for a command's [parameters](#CommandParam), and
@@ -166,60 +185,70 @@ function getParamHandler(pm) {
   if (option && paramHandlers[option]) return paramHandlers[option]
 }
 
-export function initCommands(schema) {
-  let result = Object.create(null)
-  for (let cmd in globalCommands) result[cmd] = globalCommands[cmd]
-  function fromTypes(types) {
-    for (let name in types) {
-      let type = types[name], cmds = type.command
-      if (cmds) cmds.forEach(spec => {
-        result[spec.name] = new Command(spec, type)
-      })
-    }
+export function deriveCommands(pm) {
+  let found = Object.create(null), config = pm.options.commands
+  function add(name, spec, self) {
+    if (!pm.isIncluded(name)) return
+    if (found[name]) throw new Error("Duplicate definition of command " + name)
+    found[name] = new Command(spec, self, name)
   }
-  fromTypes(schema.nodes)
-  fromTypes(schema.marks)
-  return result
+  function addAndOverride(name, spec, self) {
+    if (Object.prototype.hasOwnProperty.call(config, name)) {
+      let confSpec = config[name]
+      if (!confSpec) return
+      if (confSpec.run) return
+      let newSpec = Object.create(null)
+      for (let prop in spec) newSpec[prop] = spec[prop]
+      for (let prop in confSpec) newSpec[prop] = confSpec[prop]
+      spec = newSpec
+    }
+    add(name, spec, self)
+  }
+
+  pm.schema.registry("command", (spec, type, name) => {
+    if (spec.derive) {
+      let conf = typeof spec.derive == "object" ? spec.derive : {}
+      let dname = conf.name || spec.name
+      let derive = type.constructor.deriveableCommands[dname]
+      if (!derive) throw new Error("Don't know how to derive command " + dname)
+      let derived = derive.call(type, conf)
+      for (var prop in spec) if (prop != "derive") derived[prop] = spec[prop]
+      spec = derived
+    }
+    addAndOverride("schema:" + name + ":" + spec.name, spec, type)
+  })
+  for (let name in commands)
+    addAndOverride(name, commands[name])
+  for (let name in config) {
+    let spec = config[name]
+    if (spec && spec.run) add(name, spec)
+  }
+  return found
 }
 
-export function defaultKeymap(pm) {
-  let bindings = {}
-  function add(command, key) {
-    if (Array.isArray(key)) {
-      for (let i = 0; i < key.length; i++) add(command, key[i])
-    } else if (key) {
-      let [_, name, rank = 50] = /^(.+?)(?:\((\d+)\))?$/.exec(key)
+export function deriveKeymap(pm) {
+  let bindings = {}, platform = browser.mac ? "mac" : "pc"
+  function add(command, keys) {
+    for (let i = 0; i < keys.length; i++) {
+      let [_, name, rank = 50] = /^(.+?)(?:\((\d+)\))?$/.exec(keys[i])
       sortedInsert(bindings[name] || (bindings[name] = []), {command, rank},
                    (a, b) => a.rank - b.rank)
     }
   }
   for (let name in pm.commands) {
-    let cmd = pm.commands[name]
-    add(name, cmd.spec.key)
-    add(name, browser.mac ? cmd.spec.macKey : cmd.spec.pcKey)
+    let cmd = pm.commands[name], keys = cmd.spec.keys
+    if (!keys) continue
+    if (Array.isArray(keys)) add(cmd, keys)
+    if (keys.all) add(cmd, keys.all)
+    if (keys[platform]) add(cmd, keys[platform])
   }
 
   for (let key in bindings)
-    bindings[key] = bindings[key].map(b => b.command)
+    bindings[key] = bindings[key].map(b => b.command.name)
   return new Keymap(bindings)
 }
 
 const andScroll = {scrollIntoView: true}
-
-HardBreak.register("command", {
-  name: "insertHardBreak",
-  label: "Insert hard break",
-  run(pm) {
-    let {node, from} = pm.selection
-    if (node && node.isBlock)
-      return false
-    else if (pm.doc.path(from.path).type.isCode)
-      return pm.tr.typeText("\n").apply(andScroll)
-    else
-      return pm.tr.replaceSelection(this.create()).apply(andScroll)
-  },
-  key: ["Mod-Enter", "Shift-Enter"]
-})
 
 function markActive(pm, type) {
   let sel = pm.selection
@@ -253,73 +282,172 @@ function markApplies(pm, type) {
   return relevant
 }
 
-function generateMarkCommands(type, name, labelName, spec) {
-  if (!labelName) labelName = name
-  let cap = name.charAt(0).toUpperCase() + name.slice(1)
-  type.register("command", {
-    name: "set" + cap,
-    label: "Set " + labelName,
-    run(pm) { pm.setMark(this, true) },
-    select(pm) { return canAddInline(pm, this) },
-    icon: {from: name}
-  })
-  type.register("command", {
-    name: "unset" + cap,
-    label: "Remove " + labelName,
-    run(pm) { pm.setMark(this, false) },
-    select(pm) { return markActive(pm, this) },
-    icon: {from: name}
-  })
-  let command = {
-    name,
-    label: "Toggle " + labelName,
-    run(pm) { pm.setMark(this, null) },
-    active(pm) { return markActive(pm, this) },
-    select(pm) { return markApplies(pm, this) }
-  }
-  for (let prop in spec) command[prop] = spec[prop]
-  type.register("command", command)
-}
+NodeType.deriveableCommands = Object.create(null)
+MarkType.deriveableCommands = Object.create(null)
 
-generateMarkCommands(StrongMark, "strong", null, {
-  menuGroup: "inline", menuRank: 20,
-  icon: {
+MarkType.deriveableCommands.set = () => ({
+  run(pm) { pm.setMark(this, true) },
+  select(pm) { return canAddInline(pm, this) }
+})
+
+MarkType.deriveableCommands.unset = () => ({
+  run(pm) { pm.setMark(this, false) },
+  select(pm) { return markActive(pm, this) }
+})
+
+MarkType.deriveableCommands.toggle = () => ({
+  run(pm) { pm.setMark(this, null) },
+  active(pm) { return markActive(pm, this) },
+  select(pm) { return markApplies(pm, this) }
+})
+
+// FIXME find a way to put an introduction text above the command section
+
+// ;; #path="schema:strong:set" #kind=command
+// Add the [strong](#StrongMark) mark to the selected content.
+
+StrongMark.register("command", {name: "set", derive: true, label: "Set strong"})
+
+// ;; #path="schema:strong:unset" #kind=command
+// Remove the [strong](#StrongMark) mark from the selected content.
+
+StrongMark.register("command", {name: "unset", derive: true, label: "Unset strong"})
+
+// ;; #path="schema:strong:toggle" #kind=command
+// Toggle the [strong](#StrongMark) mark. If there is any strong
+// content in the selection, or there is no selection and the [active
+// marks](#ProseMirror.activeMarks) contain the strong mark, this
+// counts as [active](#Command.active) and executing it removes the
+// mark. Otherwise, this does not count as active, and executing it
+// makes the selected content strong.
+//
+// **Keybindings:** Mod-B
+//
+// Registers itself in the inline [menu](#FIXME).
+
+StrongMark.register("command", {
+  name: "toggle",
+  derive: true,
+  label: "Toggle strong",
+  menuGroup: "inline(20)",
+  display: {
+    type: "icon",
     width: 805, height: 1024,
     path: "M317 869q42 18 80 18 214 0 214-191 0-65-23-102-15-25-35-42t-38-26-46-14-48-6-54-1q-41 0-57 5 0 30-0 90t-0 90q0 4-0 38t-0 55 2 47 6 38zM309 442q24 4 62 4 46 0 81-7t62-25 42-51 14-81q0-40-16-70t-45-46-61-24-70-8q-28 0-74 7 0 28 2 86t2 86q0 15-0 45t-0 45q0 26 0 39zM0 950l1-53q8-2 48-9t60-15q4-6 7-15t4-19 3-18 1-21 0-19v-37q0-561-12-585-2-4-12-8t-25-6-28-4-27-2-17-1l-2-47q56-1 194-6t213-5q13 0 39 0t38 0q40 0 78 7t73 24 61 40 42 59 16 78q0 29-9 54t-22 41-36 32-41 25-48 22q88 20 146 76t58 141q0 57-20 102t-53 74-78 48-93 27-100 8q-25 0-75-1t-75-1q-60 0-175 6t-132 6z"
   },
-  key: "Mod-B"
+  keys: ["Mod-B"]
 })
 
-generateMarkCommands(EmMark, "em", "emphasis", {
-  menuGroup: "inline", menuRank: 21,
-  icon: {
+// ;; #path=schema:em:set #kind=command
+// Add the [emphasis](#EmMark) mark to the selected content.
+
+EmMark.register("command", {name: "set", derive: true, label: "Add emphasis"})
+
+// ;; #path=schema:em:unset #kind=command
+// Remove the [emphasis](#EmMark) mark from the selected content.
+
+EmMark.register("command", {name: "unset", derive: true, label: "Remove emphasis"})
+
+// ;; #path=schema:em:toggle #kind=command
+// Toggle the [emphasis](#EmMark) mark. If there is any emphasized
+// content in the selection, or there is no selection and the [active
+// marks](#ProseMirror.activeMarks) contain the emphasis mark, this
+// counts as [active](#Command.active) and executing it removes the
+// mark. Otherwise, this does not count as active, and executing it
+// makes the selected content emphasized.
+//
+// **Keybindings:** Mod-I
+//
+// Registers itself in the inline [menu](#FIXME).
+
+EmMark.register("command", {
+  name: "toggle",
+  derive: true,
+  label: "Toggle emphasis",
+  menuGroup: "inline(21)",
+  display: {
+    type: "icon",
     width: 585, height: 1024,
     path: "M0 949l9-48q3-1 46-12t63-21q16-20 23-57 0-4 35-165t65-310 29-169v-14q-13-7-31-10t-39-4-33-3l10-58q18 1 68 3t85 4 68 1q27 0 56-1t69-4 56-3q-2 22-10 50-17 5-58 16t-62 19q-4 10-8 24t-5 22-4 26-3 24q-15 84-50 239t-44 203q-1 5-7 33t-11 51-9 47-3 32l0 10q9 2 105 17-1 25-9 56-6 0-18 0t-18 0q-16 0-49-5t-49-5q-78-1-117-1-29 0-81 5t-69 6z"
   },
-  key: "Mod-I"
+  keys: ["Mod-I"]
 })
 
-generateMarkCommands(CodeMark, "code", null, {
-  menuGroup: "inline", menuRank: 22,
-  icon: {
+// ;; #path=schema:code:set #kind=command
+// Add the [code](#CodeMark) mark to the selected content.
+
+CodeMark.register("command", {name: "set", derive: true, label: "Set code style"})
+
+// ;; #path=schema:code:unset #kind=command
+// Remove the [code](#CodeMark) mark from the selected content.
+
+CodeMark.register("command", {name: "unset", derive: true, label: "Remove code style"})
+
+// ;; #path=schema:code:toggle #kind=command
+// Toggle the [code](#CodeMark) mark. If there is any code-styled
+// content in the selection, or there is no selection and the [active
+// marks](#ProseMirror.activeMarks) contain the code mark, this
+// counts as [active](#Command.active) and executing it removes the
+// mark. Otherwise, this does not count as active, and executing it
+// styles the selected content as code.
+//
+// **Keybindings:** Mod-`
+//
+// Registers itself in the inline [menu](#FIXME).
+
+CodeMark.register("command", {
+  name: "toggle",
+  derive: true,
+  label: "Toggle code style",
+  menuGroup: "inline(22)",
+  display: {
+    type: "icon",
     width: 896, height: 1024,
     path: "M608 192l-96 96 224 224-224 224 96 96 288-320-288-320zM288 192l-288 320 288 320 96-96-224-224 224-224-96-96z"
   },
-  key: "Mod-`"
+  keys: ["Mod-`"]
 })
 
+// ;; #path=schema:link:unset #kind=command
+// Removes all links for the selected content, or, if there is no
+// selection, from the [active marks](#ProseMirror.activeMarks). Will
+// only [select](#Command.select) itself when there is a link in the
+// selection or active marks.
+//
+// Registers itself in the inline [menu](#FIXME).
+
+const linkIcon = {
+  type: "icon",
+  width: 951, height: 1024,
+  path: "M832 694q0-22-16-38l-118-118q-16-16-38-16-24 0-41 18 1 1 10 10t12 12 8 10 7 14 2 15q0 22-16 38t-38 16q-8 0-15-2t-14-7-10-8-12-12-10-10q-18 17-18 41 0 22 16 38l117 118q15 15 38 15 22 0 38-14l84-83q16-16 16-38zM430 292q0-22-16-38l-117-118q-16-16-38-16-22 0-38 15l-84 83q-16 16-16 38 0 22 16 38l118 118q15 15 38 15 24 0 41-17-1-1-10-10t-12-12-8-10-7-14-2-15q0-22 16-38t38-16q8 0 15 2t14 7 10 8 12 12 10 10q18-17 18-41zM941 694q0 68-48 116l-84 83q-47 47-116 47-69 0-116-48l-117-118q-47-47-47-116 0-70 50-119l-50-50q-49 50-118 50-68 0-116-48l-118-118q-48-48-48-116t48-116l84-83q47-47 116-47 69 0 116 48l117 118q47 47 47 116 0 70-50 119l50 50q49-50 118-50 68 0 116 48l118 118q48 48 48 116z"
+}
+
 LinkMark.register("command", {
-  name: "unlink",
+  name: "unset",
+  derive: true,
   label: "Unlink",
-  run(pm) { pm.setMark(this, false) },
-  select(pm) { return markActive(pm, this) },
+  menuGroup: "inline(30)",
   active() { return true },
-  menuGroup: "inline", menuRank: 30,
-  icon: {from: "link"}
+  display: linkIcon
 })
 
+// ;; #path=schema:link:set #kind=command
+// Adds a link mark to the selection or set of [active
+// marks](#ProseMirror.activeMarks). Takes parameters to determine the
+// attributes of the link:
+//
+// **`href`**`: string`
+//   : The link's target.
+//
+// **`title`**`: string`
+//   : The link's title.
+//
+// Adds itself to the inline [menu](#FIXME). Only selects itself when
+// `unlink` isn't selected, so that only one of the two is visible in
+// the menu at any time.
+
 LinkMark.register("command", {
-  name: "link",
+  name: "set",
   label: "Add link",
   run(pm, href, title) { pm.setMark(this, true, {href, title}) },
   params: [
@@ -327,15 +455,29 @@ LinkMark.register("command", {
     {label: "Title", type: "text", default: ""}
   ],
   select(pm) { return markApplies(pm, this) && !markActive(pm, this) },
-  menuGroup: "inline", menuRank: 30,
-  icon: {
-    width: 951, height: 1024,
-    path: "M832 694q0-22-16-38l-118-118q-16-16-38-16-24 0-41 18 1 1 10 10t12 12 8 10 7 14 2 15q0 22-16 38t-38 16q-8 0-15-2t-14-7-10-8-12-12-10-10q-18 17-18 41 0 22 16 38l117 118q15 15 38 15 22 0 38-14l84-83q16-16 16-38zM430 292q0-22-16-38l-117-118q-16-16-38-16-22 0-38 15l-84 83q-16 16-16 38 0 22 16 38l118 118q15 15 38 15 24 0 41-17-1-1-10-10t-12-12-8-10-7-14-2-15q0-22 16-38t38-16q8 0 15 2t14 7 10 8 12 12 10 10q18-17 18-41zM941 694q0 68-48 116l-84 83q-47 47-116 47-69 0-116-48l-117-118q-47-47-47-116 0-70 50-119l-50-50q-49 50-118 50-68 0-116-48l-118-118q-48-48-48-116t48-116l84-83q47-47 116-47 69 0 116 48l117 118q47 47 47 116 0 70-50 119l50 50q49-50 118-50 68 0 116 48l118 118q48 48 48 116z"
-  }
+  menuGroup: "inline(30)",
+  display: linkIcon
+  // FIXME pre-fill params when a single link is selected
+  // (If parameter pre-filling is going to continue working like that)
 })
 
+// ;; #path=schema:image:insert #kind=command
+// Replace the selection with an [image](#Image) node. Takes paramers
+// that specify the image's attributes:
+//
+// **`src`**`: string`
+//   : The URL of the image.
+//
+// **`alt`**`: string`
+//   : The alt text for the image.
+//
+// **`title`**`: string`
+//   : A title for the image.
+//
+// Registers itself in the inline [menu](#FIXME).
+
 Image.register("command", {
-  name: "insertImage",
+  name: "insert",
   label: "Insert image",
   run(pm, src, alt, title) {
     return pm.tr.replaceSelection(this.create({src, title, alt})).apply(andScroll)
@@ -348,8 +490,9 @@ Image.register("command", {
   select(pm) {
     return pm.doc.path(pm.selection.from.path).type.canContainType(this)
   },
-  menuGroup: "inline", menuRank: 40,
-  icon: {
+  menuGroup: "inline(40)",
+  display: {
+    type: "icon",
     width: 1097, height: 1024,
     path: "M365 329q0 45-32 77t-77 32-77-32-32-77 32-77 77-32 77 32 32 77zM950 548v256h-804v-109l182-182 91 91 292-292zM1005 146h-914q-7 0-12 5t-5 12v694q0 7 5 12t12 5h914q7 0 12-5t5-12v-694q0-7-5-12t-12-5zM1097 164v694q0 37-26 64t-64 26h-914q-37 0-64-26t-26-64v-694q0-37 26-64t64-26h914q37 0 64 26t26 64z"
   },
@@ -357,16 +500,11 @@ Image.register("command", {
     let {node} = pm.selection
     if (node && node.type == this)
       return [node.attrs.src, node.attrs.alt, node.attrs.title]
+    // FIXME else use the selected text as alt
   }
 })
 
-/**
- * Get an offset moving backward from a current offset inside a node.
- *
- * @param  {Object} parent The parent node.
- * @param  {int}    offset Offset to move from inside the node.
- * @param  {string} by     Size to delete by. Either "char" or "word".
- */
+// Get an offset moving backward from a current offset inside a node.
 function moveBackward(parent, offset, by) {
   if (by != "char" && by != "word")
     throw new Error("Unknown motion unit: " + by)
@@ -398,14 +536,23 @@ function moveBackward(parent, offset, by) {
   }
 }
 
+// ;; #path=deleteSelection #kind=command
+// Delete the selection, if there is one.
+//
+// **Keybindings:** Backspace, Delete, Mod-Backspace, Mod-Delete,
+// **Ctrl-H (Mac), Alt-Backspace (Mac), Ctrl-D (Mac),
+// **Ctrl-Alt-Backspace (Mac), Alt-Delete (Mac), Alt-D (Mac)
+
 defineCommand({
   name: "deleteSelection",
   label: "Delete the selection",
   run(pm) {
     return pm.tr.replaceSelection().apply(andScroll)
   },
-  key: ["Backspace(10)", "Delete(10)", "Mod-Backspace(10)", "Mod-Delete(10)"],
-  macKey: ["Ctrl-H(10)", "Alt-Backspace(10)", "Ctrl-D(10)", "Ctrl-Alt-Backspace(10)", "Alt-Delete(10)", "Alt-D(10)"]
+  keys: {
+    all: ["Backspace(10)", "Delete(10)", "Mod-Backspace(10)", "Mod-Delete(10)"],
+    mac: ["Ctrl-H(10)", "Alt-Backspace(10)", "Ctrl-D(10)", "Ctrl-Alt-Backspace(10)", "Alt-Delete(10)", "Alt-D(10)"]
+  }
 })
 
 function deleteBarrier(pm, cut) {
@@ -427,6 +574,15 @@ function deleteBarrier(pm, cut) {
   let selAfter = findSelectionFrom(pm.doc, cut, 1)
   return pm.tr.lift(selAfter.from, selAfter.to).apply(andScroll)
 }
+
+// ;; #path=joinBackward #kind=command
+// If the selection is empty and at the start of a textblock, move
+// that block closer to the block before it, by lifting it out of its
+// parent or, if it has no parent it doesn't share with the node
+// before it, moving it into a parent of that node, or joining it with
+// that.
+//
+// **Keybindings:** Backspace, Mod-Backspace
 
 defineCommand({
   name: "joinBackward",
@@ -453,8 +609,14 @@ defineCommand({
     // Apply the joining algorithm
     return deleteBarrier(pm, cut)
   },
-  key: ["Backspace(30)", "Mod-Backspace(30)"]
+  keys: ["Backspace(30)", "Mod-Backspace(30)"]
 })
+
+// ;; #path=deleteCharBefore #kind=command
+// Delete the character before the cursor, if the selection is empty
+// and the cursor isn't at the start of a textblock.
+//
+// **Keybindings:** Backspace, Ctrl-H (Mac)
 
 defineCommand({
   name: "deleteCharBefore",
@@ -465,9 +627,17 @@ defineCommand({
     let from = moveBackward(pm.doc.path(head.path), head.offset, "char")
     return pm.tr.delete(new Pos(head.path, from), head).apply(andScroll)
   },
-  key: "Backspace(60)",
-  macKey: "Ctrl-H(40)"
+  keys: {
+    all: ["Backspace(60)"],
+    mac: ["Ctrl-H(40)"]
+  }
 })
+
+// ;; #path=deleteWordBefore #kind=command
+// Delete the word before the cursor, if the selection is empty and
+// the cursor isn't at the start of a textblock.
+//
+// **Keybindings:** Mod-Backspace, Alt-Backspace (Mac)
 
 defineCommand({
   name: "deleteWordBefore",
@@ -478,8 +648,10 @@ defineCommand({
     let from = moveBackward(pm.doc.path(head.path), head.offset, "word")
     return pm.tr.delete(new Pos(head.path, from), head).apply(andScroll)
   },
-  key: "Mod-Backspace(40)",
-  macKey: "Alt-Backspace(40)"
+  keys: {
+    all: ["Mod-Backspace(40)"],
+    mac: ["Alt-Backspace(40)"]
+  }
 })
 
 function moveForward(parent, offset, by) {
@@ -510,6 +682,15 @@ function moveForward(parent, offset, by) {
   }
 }
 
+// ;; #path=joinForward #kind=command
+// If the selection is empty and the cursor is at the end of a
+// textblock, move the node after it closer to the node with the
+// cursor (lifting it out of parents that aren't shared, moving it
+// into parents of the cursor block, or joining the two when they are
+// siblings).
+//
+// **Keybindings:** Delete, Mod-Delete
+
 defineCommand({
   name: "joinForward",
   label: "Join with the block below",
@@ -536,8 +717,14 @@ defineCommand({
     // Apply the joining algorithm
     return deleteBarrier(pm, cut)
   },
-  key: ["Delete(30)", "Mod-Delete(30)"]
+  keys: ["Delete(30)", "Mod-Delete(30)"]
 })
+
+// ;; #path=deleteCharAfter #kind=command
+// Delete the character after the cursor, if the selection is empty
+// and the cursor isn't at the end of its textblock.
+//
+// **Keybindings:** Delete, Ctrl-D (Mac)
 
 defineCommand({
   name: "deleteCharAfter",
@@ -548,21 +735,32 @@ defineCommand({
     let to = moveForward(pm.doc.path(head.path), head.offset, "char")
     return pm.tr.delete(head, new Pos(head.path, to)).apply(andScroll)
   },
-  key: "Delete(60)",
-  macKey: "Ctrl-D(60)"
+  keys: {
+    all: ["Delete(60)"],
+    mac: ["Ctrl-D(60)"]
+  }
 })
+
+// ;; #path=deleteWordAfter #kind=command
+// Delete the word after the cursor, if the selection is empty and the
+// cursor isn't at the end of a textblock.
+//
+// **Keybindings:** Mod-Delete, Ctrl-Alt-Backspace (Mac), Alt-Delete
+// (Mac), Alt-D (Mac)
 
 defineCommand({
   name: "deleteWordAfter",
-  label: "Delete a character after the cursor",
+  label: "Delete a word after the cursor",
   run(pm) {
     let {head, empty} = pm.selection
     if (!empty || head.offset == pm.doc.path(head.path).size) return false
     let to = moveForward(pm.doc.path(head.path), head.offset, "word")
     return pm.tr.delete(head, new Pos(head.path, to)).apply(andScroll)
   },
-  key: "Mod-Delete(40)",
-  macKey: ["Ctrl-Alt-Backspace(40)", "Alt-Delete(40)", "Alt-D(40)"]
+  keys: {
+    all: ["Mod-Delete(40)"],
+    mac: ["Ctrl-Alt-Backspace(40)", "Alt-Delete(40)", "Alt-D(40)"]
+  }
 })
 
 function joinPointAbove(pm) {
@@ -571,23 +769,32 @@ function joinPointAbove(pm) {
   else return joinPoint(pm.doc, from, -1)
 }
 
+// ;; #path=joinUp #kind=command
+// Join the selected block or, if there is a text selection, the
+// closest ancestor block of the selection that can be joined, with
+// the sibling above it.
+//
+// **Keybindings:** Alt-Up
+//
+// Registers itself in the block [menu](#FIXME)
+
 defineCommand({
   name: "joinUp",
   label: "Join with above block",
   run(pm) {
-    let node = pm.selection.node
-    let point = joinPointAbove(pm)
+    let point = joinPointAbove(pm), isNode = pm.selection.node
     if (!point) return false
     pm.tr.join(point).apply()
-    if (node) pm.setNodeSelection(point.move(-1))
+    if (isNode) pm.setNodeSelection(point.move(-1))
   },
   select(pm) { return joinPointAbove(pm) },
-  menuGroup: "block", menuRank: 80,
-  icon: {
+  menuGroup: "block(80)",
+  display: {
+    type: "icon",
     width: 800, height: 900,
     path: "M0 75h800v125h-800z M0 825h800v-125h-800z M250 400h100v-100h100v100h100v100h-100v100h-100v-100h-100z"
   },
-  key: "Alt-Up"
+  keys: ["Alt-Up"]
 })
 
 function joinPointBelow(pm) {
@@ -595,6 +802,12 @@ function joinPointBelow(pm) {
   if (node) return joinableBlocks(pm.doc, to) ? to : null
   else return joinPoint(pm.doc, to, 1)
 }
+
+// ;; #path=joinDown #kind=command
+// Join the selected block, or the closest ancestor of the selection
+// that can be joined, with the sibling after it.
+//
+// **Keybindings:** Alt-Down
 
 defineCommand({
   name: "joinDown",
@@ -607,8 +820,16 @@ defineCommand({
     if (node) pm.setNodeSelection(point.move(-1))
   },
   select(pm) { return joinPointBelow(pm) },
-  key: "Alt-Down"
+  keys: ["Alt-Down"]
 })
+
+// ;; #path=lift #kind=command
+// Lift the selected block, or the closest ancestor block of the
+// selection that can be lifted, out of its parent node.
+//
+// **Keybindings:** Alt-Left
+//
+// Registers itself in the block [menu](#FIXME).
 
 defineCommand({
   name: "lift",
@@ -621,12 +842,13 @@ defineCommand({
     let {from, to} = pm.selection
     return canLift(pm.doc, from, to)
   },
-  menuGroup: "block", menuRank: 75,
-  icon: {
+  menuGroup: "block(75)",
+  display: {
+    type: "icon",
     width: 1024, height: 1024,
     path: "M219 310v329q0 7-5 12t-12 5q-8 0-13-5l-164-164q-5-5-5-13t5-13l164-164q5-5 13-5 7 0 12 5t5 12zM1024 749v109q0 7-5 12t-12 5h-987q-7 0-12-5t-5-12v-109q0-7 5-12t12-5h987q7 0 12 5t5 12zM1024 530v109q0 7-5 12t-12 5h-621q-7 0-12-5t-5-12v-109q0-7 5-12t12-5h621q7 0 12 5t5 12zM1024 310v109q0 7-5 12t-12 5h-621q-7 0-12-5t-5-12v-109q0-7 5-12t12-5h621q7 0 12 5t5 12zM1024 91v109q0 7-5 12t-12 5h-987q-7 0-12-5t-5-12v-109q0-7 5-12t12-5h987q7 0 12 5t5 12z"
   },
-  key: "Alt-Left"
+  keys: ["Alt-Left"]
 })
 
 function isAtTopOfListItem(doc, from, to, listType) {
@@ -636,59 +858,114 @@ function isAtTopOfListItem(doc, from, to, listType) {
     listType.canContain(doc.path(from.path.slice(0, from.path.length - 1)))
 }
 
-function wrapCommand(type, name, labelName, isList, spec) {
-  let command = {
-    name: "wrap" + name,
-    label: "Wrap in " + labelName,
-    run(pm) {
-      let {from, to, head} = pm.selection, doJoin = false
-      if (isList && head && isAtTopOfListItem(pm.doc, from, to, this)) {
-        // Don't do anything if this is the top of the list
-        if (from.path[from.path.length - 2] == 0) return false
-        doJoin = true
-      }
-      let tr = pm.tr.wrap(from, to, this)
-      if (doJoin) tr.join(from.shorten(from.depth - 2))
-      return tr.apply(andScroll)
-    },
-    select(pm) {
-      let {from, to, head} = pm.selection
-      if (isList && head && isAtTopOfListItem(pm.doc, from, to, this) &&
-          from.path[from.path.length - 2] == 0)
-        return false
-      return canWrap(pm.doc, from, to, this)
+NodeType.deriveableCommands.wrap = conf => ({
+  run(pm) {
+    let {from, to, head} = pm.selection, doJoin = false
+    if (this.isList && head && isAtTopOfListItem(pm.doc, from, to, this)) {
+      // Don't do anything if this is the top of the list
+      if (from.path[from.path.length - 2] == 0) return false
+      doJoin = true
     }
+    let tr = pm.tr.wrap(from, to, this, conf.attrs)
+    if (doJoin) tr.join(from.shorten(from.depth - 2))
+    return tr.apply(andScroll)
+  },
+  select(pm) {
+    let {from, to, head} = pm.selection
+    if (this.isList && head && isAtTopOfListItem(pm.doc, from, to, this) &&
+        from.path[from.path.length - 2] == 0)
+      return false
+    return canWrap(pm.doc, from, to, this, conf.attrs)
   }
-  for (let key in spec) command[key] = spec[key]
-  type.register("command", command)
-}
+})
 
-wrapCommand(BulletList, "BulletList", "bullet list", true, {
-  menuGroup: "block", menuRank: 40,
-  icon: {
+// ;; #path=schema:bullet_list:wrap #kind=command
+// Wrap the selection in a bullet list.
+//
+// **Keybindings:** Alt-Right '*', Alt-Right '-'
+//
+// Registers itself in the block [menu](#FIXME).
+
+BulletList.register("command", {
+  name: "wrap",
+  derive: true,
+  labelName: "bullet list",
+  menuGroup: "block(40)",
+  display: {
+    type: "icon",
     width: 768, height: 896,
     path: "M0 512h128v-128h-128v128zM0 256h128v-128h-128v128zM0 768h128v-128h-128v128zM256 512h512v-128h-512v128zM256 256h512v-128h-512v128zM256 768h512v-128h-512v128z"
   },
-  key: ["Alt-Right '*'", "Alt-Right '-'"]
+  keys: ["Alt-Right '*'", "Alt-Right '-'"]
 })
 
-wrapCommand(OrderedList, "OrderedList", "ordered list", true, {
-  menuGroup: "block", menuRank: 41,
-  icon: {
+// ;; #path=schema:ordered_list:wrap #kind=command
+// Wrap the selection in an ordered list.
+//
+// **Keybindings:** Alt-Right '1'
+//
+// Registers itself in the block [menu](#FIXME).
+
+OrderedList.register("command", {
+  name: "wrap",
+  derive: true,
+  labelName: "ordered list",
+  menuGroup: "block(41)",
+  display: {
+    type: "icon",
     width: 768, height: 896,
     path: "M320 512h448v-128h-448v128zM320 768h448v-128h-448v128zM320 128v128h448v-128h-448zM79 384h78v-256h-36l-85 23v50l43-2v185zM189 590c0-36-12-78-96-78-33 0-64 6-83 16l1 66c21-10 42-15 67-15s32 11 32 28c0 26-30 58-110 112v50h192v-67l-91 2c49-30 87-66 87-113l1-1z"
   },
-  key: "Alt-Right '1'"
+  keys: ["Alt-Right '1'"]
 })
 
-wrapCommand(BlockQuote, "BlockQuote", "block quote", false, {
-  menuGroup: "block", menuRank: 45,
-  icon: {
+// ;; #path=schema:blockquote:wrap #kind=command
+// Wrap the selection in a block quote.
+//
+// **Keybindings:** Alt-Right '>', Alt-Right '"'
+//
+// Registers itself in the block [menu](#FIXME).
+
+BlockQuote.register("command", {
+  name: "wrap",
+  derive: true,
+  labelName: "block quote",
+  menuGroup: "block(45)",
+  display: {
+    type: "icon",
     width: 640, height: 896,
     path: "M0 448v256h256v-256h-128c0 0 0-128 128-128v-128c0 0-256 0-256 256zM640 320v-128c0 0-256 0-256 256v256h256v-256h-128c0 0 0-128 128-128z"
   },
-  key: ["Alt-Right '>'", "Alt-Right '\"'"]
+  keys: ["Alt-Right '>'", "Alt-Right '\"'"]
 })
+
+// ;; #path=schema:hard_break:insert #kind=command
+// Replace the selection with a hard break node. If the selection is
+// in a node whose [type](#NodeType) has a truthy `isCode` property
+// (such as `CodeBlock` in the default schema), a regular newline is
+// inserted instead.
+//
+// **Keybindings:** Mod-Enter, Shift-Enter
+HardBreak.register("command", {
+  name: "insert",
+  label: "Insert hard break",
+  run(pm) {
+    let {node, from} = pm.selection
+    if (node && node.isBlock)
+      return false
+    else if (pm.doc.path(from.path).type.isCode)
+      return pm.tr.typeText("\n").apply(andScroll)
+    else
+      return pm.tr.replaceSelection(this.create()).apply(andScroll)
+  },
+  keys: ["Mod-Enter", "Shift-Enter"]
+})
+
+// ;; #path=newlineInCode #kind=command
+// If the selection is in a node whose type has a truthy `isCode`
+// property, replace the selection with a newline character.
+//
+// **Keybindings:** Enter
 
 defineCommand({
   name: "newlineInCode",
@@ -702,8 +979,14 @@ defineCommand({
     else
       return false
   },
-  key: "Enter(10)"
+  keys: ["Enter(10)"]
 })
+
+// ;; #path=createParagraphNew #kind=command
+// If a content-less block node is selected, create an empty paragraph
+// before (if it is its parent's first child) or after it.
+//
+// **Keybindings:** Enter
 
 defineCommand({
   name: "createParagraphNear",
@@ -715,22 +998,37 @@ defineCommand({
     pm.tr.insert(side, pm.schema.defaultTextblockType().create()).apply(andScroll)
     pm.setTextSelection(new Pos(side.toPath(), 0))
   },
-  key: "Enter(20)"
+  keys: ["Enter(20)"]
 })
+
+// ;; #path=liftEmptyBlock #kind=command
+// If the cursor is in an empty textblock that can be lifted, lift the
+// block.
+//
+// **Keybindings:** Enter
 
 defineCommand({
   name: "liftEmptyBlock",
   label: "Move current block up",
   run(pm) {
     let {head, empty} = pm.selection
-    if (!empty || head.offset > 0) return false
-    if (head.path[head.path.length - 1] > 0 &&
-        pm.tr.split(head.shorten()).apply() !== false)
-      return
+    if (!empty || head.offset > 0 || pm.doc.path(head.path).size) return false
+    if (head.depth > 1) {
+      let shorter = head.shorten()
+      if (shorter.offset > 0 && shorter.offset < pm.doc.path(shorter.path).size - 1 &&
+          pm.tr.split(shorter).apply() !== false)
+        return
+    }
     return pm.tr.lift(head).apply(andScroll)
   },
-  key: "Enter(30)"
+  keys: ["Enter(30)"]
 })
+
+// ;; #path=splitBlock #kind=command
+// Split the parent block of the selection. If the selection is a text
+// selection, delete it.
+//
+// **Keybindings:** Enter
 
 defineCommand({
   name: "splitBlock",
@@ -745,22 +1043,28 @@ defineCommand({
       return pm.tr.delete(from, to).split(from, 1, type).apply(andScroll)
     }
   },
-  key: "Enter(60)"
+  keys: ["Enter(60)"]
 })
 
+// ;; #path=schema:list_item:split #kind=command
+// If the selection is a text selection inside of a child of a list
+// item, split that child and the list item, and delete the selection.
+//
+// **Keybindings:** Enter
+
 ListItem.register("command", {
-  name: "splitListItem",
+  name: "split",
   label: "Split the current list item",
   run(pm) {
-    let {from, to, node, empty} = pm.selection
-    if (node && node.isBlock || from.path.length < 2 || !Pos.samePath(from.path, to.path) ||
-        empty && from.offset == 0) return false
+    let {from, to, node} = pm.selection
+    if ((node && node.isBlock) ||
+        from.path.length < 2 || !Pos.samePath(from.path, to.path)) return false
     let toParent = from.shorten(), grandParent = pm.doc.path(toParent.path)
     if (grandParent.type != this) return false
     let nextType = to.offset == grandParent.child(toParent.offset).size ? pm.schema.defaultTextblockType() : null
     return pm.tr.delete(from, to).split(from, 2, nextType).apply(andScroll)
   },
-  key: "Enter(50)"
+  keys: ["Enter(50)"]
 })
 
 function alreadyHasBlockType(doc, from, to, type, attrs) {
@@ -775,70 +1079,84 @@ function alreadyHasBlockType(doc, from, to, type, attrs) {
   return found
 }
 
-function blockTypeCommand(type, name, labelName, attrs, key) {
-  if (!attrs) attrs = {}
-  type.register("command", {
-    name,
-    label: "Change to " + labelName,
-    run(pm) {
-      let {from, to} = pm.selection
-      return pm.tr.setBlockType(from, to, this, attrs).apply(andScroll)
-    },
-    select(pm) {
-      let {from, to, node} = pm.selection
-      if (node)
-        return node.isTextblock && !node.hasMarkup(this, attrs)
-      else
-        return !alreadyHasBlockType(pm.doc, from, to, this, attrs)
-    },
-    key
+NodeType.deriveableCommands.make = conf => ({
+  run(pm) {
+    let {from, to} = pm.selection
+    return pm.tr.setBlockType(from, to, this, conf.attrs).apply(andScroll)
+  },
+  select(pm) {
+    let {from, to, node} = pm.selection
+    if (node)
+      return node.isTextblock && !node.hasMarkup(this, conf.attrs)
+    else
+      return !alreadyHasBlockType(pm.doc, from, to, this, conf.attrs)
+  }
+})
+
+// ;; #path=schema::heading::make_ #kind=command
+// The commands `make1` to `make6` set the textblocks in the
+// selection to become headers with the given level.
+//
+// **Keybindings:** Mod-H '1' through Mod-H '6'
+
+for (let i = 1; i <= 6; i++)
+  Heading.register("command", {
+    name: "make" + i,
+    derive: {name: "make", attrs: {level: i}},
+    label: "Change to heading " + i,
+    keys: [`Mod-H '${i}'`]
   })
-}
 
-blockTypeCommand(Heading, "makeH1", "heading 1", {level: 1}, "Mod-H '1'")
-blockTypeCommand(Heading, "makeH2", "heading 2", {level: 2}, "Mod-H '2'")
-blockTypeCommand(Heading, "makeH3", "heading 3", {level: 3}, "Mod-H '3'")
-blockTypeCommand(Heading, "makeH4", "heading 4", {level: 4}, "Mod-H '4'")
-blockTypeCommand(Heading, "makeH5", "heading 5", {level: 5}, "Mod-H '5'")
-blockTypeCommand(Heading, "makeH6", "heading 6", {level: 6}, "Mod-H '6'")
+// ;; #path=schema:paragraph:make #kind=command
+// Set the textblocks in the selection to be regular paragraphs.
+//
+// **Keybindings:** Mod-P
 
-blockTypeCommand(Paragraph, "makeParagraph", "paragraph", null, "Mod-P")
-blockTypeCommand(CodeBlock, "makeCodeBlock", "code block", null, "Mod-\\")
+Paragraph.register("command", {
+  name: "make",
+  derive: true,
+  label: "Change to paragraph",
+  keys: ["Mod-P"]
+})
+
+// ;; #path=schema:code_block:make #kind=command
+// Set the textblocks in the selection to be code blocks.
+//
+// **Keybindings:** Mod-\
+
+CodeBlock.register("command", {
+  name: "make",
+  derive: true,
+  label: "Change to code block",
+  keys: ["Mod-\\"]
+})
+
+// FIXME automate attribute reading?
+NodeType.deriveableCommands.insert = conf => ({
+  run(pm) {
+    return pm.tr.replaceSelection(this.create(conf.attrs)).apply(andScroll)
+  }
+})
+
+// ;; #path=schema:horizontal_rule:insert #kind=command
+// Replace the selection with a horizontal rule.
+//
+// **Keybindings:** Mod-Shift-Minus
 
 HorizontalRule.register("command", {
-  name: "insertHorizontalRule",
+  name: "insert",
+  derive: true,
   label: "Insert horizontal rule",
-  run(pm) {
-    return pm.tr.replaceSelection(this.create()).apply(andScroll)
-  },
-  key: "Mod-Space"
+  keys: ["Mod-Shift--"]
 })
 
-defineCommand({
-  name: "undo",
-  label: "Undo last change",
-  run(pm) { pm.scrollIntoView(); return pm.history.undo() },
-  select(pm) { return pm.history.canUndo() },
-  menuGroup: "history", menuRank: 10,
-  icon: {
-    width: 1024, height: 1024,
-    path: "M761 1024c113-206 132-520-313-509v253l-384-384 384-384v248c534-13 594 472 313 775z"
-  },
-  key: "Mod-Z"
-})
-
-defineCommand({
-  name: "redo",
-  label: "Redo last undone change",
-  run(pm) { pm.scrollIntoView(); return pm.history.redo() },
-  select(pm) { return pm.history.canRedo() },
-  menuGroup: "history", menuRank: 20,
-  icon: {
-    width: 1024, height: 1024,
-    path: "M576 248v-248l384 384-384 384v-253c-446-10-427 303-313 509-280-303-221-789 313-775z"
-  },
-  key: ["Mod-Y", "Shift-Mod-Z"]
-})
+// ;; #path=textblockType #kind=command
+// Change the type of the selected textblocks. Takes one parameter,
+// `type`, which should be a `{type: NodeType, attrs: ?Object}`
+// object, giving the new type and its attributes.
+//
+// Registers itself in the block [menu](#FIXME), where it creates the
+// textblock type dropdown.
 
 defineCommand({
   name: "textblockType",
@@ -854,8 +1172,10 @@ defineCommand({
   params: [
     {label: "Type", type: "select", options: listTextblockTypes, default: currentTextblockType, defaultLabel: "Type..."}
   ],
-  display: "select",
-  menuGroup: "block", menuRank: 10
+  display: {
+    type: "param"
+  },
+  menuGroup: "block(10)"
 })
 
 Paragraph.prototype.textblockTypes = [{label: "Normal", rank: 10}]
@@ -890,7 +1210,7 @@ function currentTextblockType(pm) {
   let types = listTextblockTypes(pm)
   for (let i = 0; i < types.length; i++) {
     let tp = types[i], val = tp.value
-    if (node.hasMarkup(val.type, val.attrs)) return tp
+    if (node.hasMarkup(val.type, val.attrs)) return tp.value
   }
 }
 
@@ -902,8 +1222,15 @@ function nodeAboveSelection(pm) {
   return i == 0 ? false : sel.head.shorten(i - 1)
 }
 
+// ;; #path=selectParentNode #kind=command
+// Move the selection to the node wrapping the current selection, if
+// any. (Will not select the document node.)
+//
+// **Keybindings:** Esc
+//
+// Registers itself in the block [menu](#FIXME).
 defineCommand({
-  name: "selectParentBlock",
+  name: "selectParentNode",
   label: "Select parent node",
   run(pm) {
     let node = nodeAboveSelection(pm)
@@ -913,9 +1240,9 @@ defineCommand({
   select(pm) {
     return nodeAboveSelection(pm)
   },
-  menuGroup: "block", menuRank: 90,
-  icon: {text: "\u2b1a", style: "font-weight: bold; vertical-align: 20%"},
-  key: "Esc"
+  menuGroup: "block(90)",
+  display: {type: "icon", text: "\u2b1a", style: "font-weight: bold; vertical-align: 20%"},
+  keys: ["Esc"]
 })
 
 function moveSelectionBlock(pm, dir) {
@@ -924,7 +1251,7 @@ function moveSelectionBlock(pm, dir) {
   return findSelectionFrom(pm.doc, node && node.isBlock ? side : side.shorten(null, dir > 0 ? 1 : 0), dir)
 }
 
-function selectBlockHorizontally(pm, dir) {
+function selectNodeHorizontally(pm, dir) {
   let {empty, node, from, to} = pm.selection
   if (!empty && !node) return false
 
@@ -952,29 +1279,39 @@ function selectBlockHorizontally(pm, dir) {
   return false
 }
 
+// ;; #path=selectNodeLeft #kind=command
+// Select the node directly before the cursor, if any.
+//
+// **Keybindings:** Left, Mod-Left
+
 defineCommand({
-  name: "selectBlockLeft",
+  name: "selectNodeLeft",
   label: "Move the selection onto or out of the block to the left",
   run(pm) {
-    let done = selectBlockHorizontally(pm, -1)
+    let done = selectNodeHorizontally(pm, -1)
     if (done) pm.scrollIntoView()
     return done
   },
-  key: ["Left", "Mod-Left"]
+  keys: ["Left", "Mod-Left"]
 })
+
+// ;; #path=selectNodeRight #kind=command
+// Select the node directly after the cursor, if any.
+//
+// **Keybindings:** Right, Mod-Right
 
 defineCommand({
-  name: "selectBlockRight",
+  name: "selectNodeRight",
   label: "Move the selection onto or out of the block to the right",
   run(pm) {
-    let done = selectBlockHorizontally(pm, 1)
+    let done = selectNodeHorizontally(pm, 1)
     if (done) pm.scrollIntoView()
     return done
   },
-  key: ["Right", "Mod-Right"]
+  keys: ["Right", "Mod-Right"]
 })
 
-function selectBlockVertically(pm, dir) {
+function selectNodeVertically(pm, dir) {
   let {empty, node, from, to} = pm.selection
   if (!empty && !node) return false
 
@@ -1008,24 +1345,76 @@ function selectBlockVertically(pm, dir) {
   return true
 }
 
-defineCommand({
-  name: "selectBlockUp",
-  label: "Move the selection onto or out of the block above",
-  run(pm) {
-    let done = selectBlockVertically(pm, -1)
-    if (done !== false) pm.scrollIntoView()
-    return done
-  },
-  key: "Up"
-})
+// ;; #path=selectNodeUp #kind=command
+// Select the node directly above the cursor, if any.
+//
+// **Keybindings:** Up
 
 defineCommand({
-  name: "selectBlockDown",
-  label: "Move the selection onto or out of the block below",
+  name: "selectNodeUp",
+  label: "Move the selection onto or out of the block above",
   run(pm) {
-    let done = selectBlockVertically(pm, 1)
+    let done = selectNodeVertically(pm, -1)
     if (done !== false) pm.scrollIntoView()
     return done
   },
-  key: "Down"
+  keys: ["Up"]
+})
+
+// ;; #path=selectNodeDown #kind=command
+// Select the node directly below the cursor, if any.
+//
+// **Keybindings:** Down
+
+defineCommand({
+  name: "selectNodeDown",
+  label: "Move the selection onto or out of the block below",
+  run(pm) {
+    let done = selectNodeVertically(pm, 1)
+    if (done !== false) pm.scrollIntoView()
+    return done
+  },
+  keys: ["Down"]
+})
+
+// ;; #path=undo #kind=command
+// Undo the most recent change event, if any.
+//
+// **Keybindings:** Mod-Z
+//
+// Registers itself in the history [menu](#FIXME).
+
+defineCommand({
+  name: "undo",
+  label: "Undo last change",
+  run(pm) { pm.scrollIntoView(); return pm.history.undo() },
+  select(pm) { return pm.history.canUndo() },
+  menuGroup: "history(10)",
+  display: {
+    type: "icon",
+    width: 1024, height: 1024,
+    path: "M761 1024c113-206 132-520-313-509v253l-384-384 384-384v248c534-13 594 472 313 775z"
+  },
+  keys: ["Mod-Z"]
+})
+
+// ;; #path=redo #kind=command
+// Redo the most recently undone change event, if any.
+//
+// **Keybindings:** Mod-Y, Shift-Mod-Z
+//
+// Registers itself in the history [menu](#FIXME).
+
+defineCommand({
+  name: "redo",
+  label: "Redo last undone change",
+  run(pm) { pm.scrollIntoView(); return pm.history.redo() },
+  select(pm) { return pm.history.canRedo() },
+  menuGroup: "history(20)",
+  display: {
+    type: "icon",
+    width: 1024, height: 1024,
+    path: "M576 248v-248l384 384-384 384v-253c-446-10-427 303-313 509-280-303-221-789 313-775z"
+  },
+  keys: ["Mod-Y", "Shift-Mod-Z"]
 })
