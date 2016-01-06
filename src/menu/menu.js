@@ -101,7 +101,7 @@ function title(pm, command) {
 }
 
 function renderIcon(command, menu) {
-  let icon = "ProseMirror-menuicon ProseMirror-icon-" + command.name
+  let icon = "ProseMirror-menuicon ProseMirror-icon-" + command.name.substring(command.name.indexOf(':')+ 1, command.name.lastIndexOf(':'))
   if (command.active(menu.pm)) icon += " ProseMirror-icon-active"
   let dom = elt("span", {class: icon, title: title(menu.pm, command)})
   dom.addEventListener("mousedown", e => {
