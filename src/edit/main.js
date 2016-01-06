@@ -3,12 +3,9 @@ import {Transform} from "../transform"
 import sortedInsert from "../util/sortedinsert"
 import {Map} from "../util/map"
 import {eventMixin} from "../util/event"
-import {requestAnimationFrame, elt, browser} from "../dom"
+import {requestAnimationFrame, elt, browser, ensureCSSAdded} from "../dom"
 
-import {toText} from "../serialize/text"
-import "../parse/text"
-import {parseFrom} from "../parse"
-import {serializeTo} from "../serialize"
+import {toText, parseFrom, serializeTo} from "../format"
 
 import {parseOptions, initOptions, setOption} from "./options"
 import {SelectionState, TextSelection, NodeSelection,
@@ -17,7 +14,7 @@ import {SelectionState, TextSelection, NodeSelection,
 import {draw, redraw} from "./draw"
 import {Input} from "./input"
 import {History} from "./history"
-import {initCommands} from "./commands"
+import {deriveKeymap, deriveCommands} from "./commands"
 import {RangeStore, MarkedRange} from "./range"
 import {normalizeKeyName} from "./keys"
 
@@ -34,6 +31,8 @@ export class ProseMirror {
   // and, if it has a [`place`](#place) option, add it to the
   // document.
   constructor(opts) {
+    ensureCSSAdded()
+
     opts = this.options = parseOptions(opts)
     // :: Schema
     // The schema for this editor's document.
@@ -72,19 +71,49 @@ export class ProseMirror {
 
     // :: Object<Command>
     // The commands available in the editor.
-    this.commands = initCommands(this.schema)
-    this.commandKeys = Object.create(null)
-
+    this.commands = null
+    this.commandKeys = null
+    this.updateCommands()
     initOptions(this)
   }
 
   // :: (string, any)
   // Update the value of the given [option](#edit_options).
-  setOption(name, value) { setOption(this, name, value) }
+  setOption(name, value) {
+    setOption(this, name, value)
+    // :: (name: string, value: *) #path=ProseMirror#events#optionChanged
+    // Fired when [`setOption`](#ProseMirror.setOption) is called.
+    this.signal("optionChanged", name, value)
+  }
 
   // :: (string) → any
   // Get the current value of the given [option](#edit_options).
   getOption(name) { return this.options[name] }
+
+  updateCommands() {
+    // :: () #path=ProseMirror#events#commandsChanging
+    // Fired before the set of commands for the editor is updated.
+    this.signal("commandsChanging")
+    this.commands = deriveCommands(this)
+    this.input.baseKeymap = deriveKeymap(this)
+    this.commandKeys = Object.create(null)
+    // :: () #path=ProseMirror#events#commandsChanged
+    // Fired when the set of commands for the editor is updated.
+    this.signal("commandsChanged")
+  }
+
+  // :: (string) → bool
+  // Test whether the given string corresponds to any of the
+  // [includes](#include) enabled for this editor.
+  isIncluded(name) {
+    for (let i = 0; i < this.options.include.length; i++) {
+      let ns = this.options.include[i]
+      let match = ns == "default"
+          ? name.indexOf(":") == -1
+          : name == ns || (name.indexOf(ns) == 0 && name.charAt(ns.length) == ":")
+      if (match) return true
+    }
+  }
 
   // :: Selection
   // Get the current selection.
@@ -461,17 +490,17 @@ export class ProseMirror {
     let cached = this.commandKeys[name]
     if (cached !== undefined) return cached
 
-    let cmd = this.commands[name]
+    let cmd = this.commands[name], keymap = this.input.baseKeymap
     if (!cmd) return this.commandKeys[name] = null
     let key = cmd.spec.key || (browser.mac ? cmd.spec.macKey : cmd.spec.pcKey)
     if (key) {
       key = normalizeKeyName(Array.isArray(key) ? key[0] : key)
-      let deflt = this.options.keymap.bindings[key]
+      let deflt = keymap.bindings[key]
       if (Array.isArray(deflt) ? deflt.indexOf(name) > -1 : deflt == name)
         return this.commandKeys[name] = key
     }
-    for (let key in this.options.keymap.bindings) {
-      let bound = this.options.keymap.bindings[key]
+    for (let key in keymap.bindings) {
+      let bound = keymap.bindings[key]
       if (Array.isArray(bound) ? bound.indexOf(name) > -1 : bound == name)
         return this.commandKeys[name] = key
     }

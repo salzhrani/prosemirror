@@ -1,9 +1,10 @@
-import {Tooltip} from "./tooltip"
+import {Tooltip} from "../ui/tooltip"
 import {elt/*, insertCSS*/} from "../dom"
-
-import {defineParamHandler} from "../edit"
+import {defineParamHandler, Command} from "../edit"
 import sortedInsert from "../util/sortedinsert"
+
 // import {getIcon} from "./icons"
+
 
 export class Menu {
   constructor(pm, display) {
@@ -119,26 +120,19 @@ function renderIcon(command, menu) {
   return dom
 }
 
-function resolveIcon(pm, command) {
-  for (;;) {
-    let icon = command.spec.icon
-    if (!icon) break
-    if (icon.from) {
-      command = pm.commands[icon.from]
-      if (!command) break
-    } else {
-      return getIcon(command.name, icon)
-    }
-  }
-  return getIcon("default", {text: "✘"})
-}
-
 function renderSelect(item, menu) {
   let param = item.params[0]
-  let value = !param.default ? null : param.default.call ? param.default(menu.pm) : param.default
+  let deflt = paramDefault(param, menu.pm, item)
+  if (deflt != null) {
+    let options = param.options.call ? param.options(menu.pm) : param.options
+    for (let i = 0; i < options.length; i++) if (options[i].value === deflt) {
+      deflt = options[i]
+      break
+    }
+  }
 
   let dom = elt("div", {class: "ProseMirror-select ProseMirror-select-command-" + item.name, title: item.label},
-                !value ? (param.defaultLabel || "Select...") : value.display ? value.display(value) : value.label)
+                !deflt ? (param.defaultLabel || "Select...") : deflt.display ? deflt.display(deflt) : deflt.label)
   dom.addEventListener("mousedown", e => {
     e.preventDefault(); e.stopPropagation()
     showSelectMenu(menu.pm, item, dom)
@@ -176,18 +170,27 @@ export function showSelectMenu(pm, item, dom) {
 }
 
 function renderItem(item, menu) {
-  var display = item.display || item.spec.display || "icon"
-  if (display == "icon") return renderIcon(item, menu)
-  else if (display == "select") return renderSelect(item, menu)
-  else if (!display) throw new Error("Command " + item.name + " can not be shown in a menu")
-  else return display.call(item, menu)
+  if (item instanceof Command) {
+    var display = item.spec.display
+    if (display.type == "icon") return renderIcon(item, menu)
+    else if (display.type == "param") return renderSelect(item, menu)
+    else throw new Error("Command " + item.name + " can not be shown in a menu")
+  } else {
+    return item.display(menu)
+  }
+}
+
+function paramDefault(param, pm, command) {
+  return !param.default ? ""
+    : param.default.call ? param.default.call(command.self, pm)
+    : param.default
 }
 
 function buildParamForm(pm, command) {
-  let prefill = command.spec.prefillParams && command.spec.prefillParams(pm)
+  let prefill = command.spec.prefillParams && command.spec.prefillParams.call(command.self, pm)
   let fields = command.params.map((param, i) => {
     let field, name = "field_" + i
-    let val = prefill ? prefill[i] : param.default || ""
+    let val = prefill ? prefill[i] : paramDefault(param, pm, command)
     if (param.type == "text")
       field = elt("input", {name, type: "text",
                             placeholder: param.label,
@@ -227,7 +230,7 @@ function gatherParams(pm, command, form) {
     let val = getValue(form.elements["field_" + i]);
     if (val) return val
     if (param.default == null) bad = true
-    else return param.default.call ? param.default(pm) : param.default
+    else return paramDefault(param, pm, command)
   })
   return bad ? null : params
 }
@@ -334,20 +337,35 @@ const separator = {
   display() { return elt("div", {class: "ProseMirror-menuseparator"}) }
 }
 
+function menuRank(cmd) {
+  let match = /^[^(]+\((\d+)\)$/.exec(cmd.spec.menuGroup)
+  return match ? +match[1] : 50
+}
+
+function computeMenuGroups(pm) {
+  let groups = Object.create(null)
+  for (let name in pm.commands) {
+    let cmd = pm.commands[name], spec = cmd.spec.menuGroup
+    if (!spec) continue
+    let [group] = /^[^(]+/.exec(spec)
+    sortedInsert(groups[group] || (groups[group] = []), cmd, (a, b) => menuRank(a) - menuRank(b))
+  }
+  pm.mod.menuGroups = groups
+  let clear = () => {
+    pm.mod.menuGroups = null
+    pm.off("commandsChanging", clear)
+  }
+  pm.on("commandsChanging", clear)
+  return groups
+}
+
 export function commandGroups(pm, ...names) {
-  return names.map(group => {
-    let found = []
-    for (let name in pm.commands) {
-      let cmd = pm.commands[name]
-      if (cmd.spec.menuGroup && cmd.spec.menuGroup == group)
-        sortedInsert(found, cmd, (a, b) => (a.spec.menuRank || 50) - (b.spec.menuRank || 50))
-    }
-    return found
-  })
+  let groups = pm.mod.menuGroups || computeMenuGroups(pm)
+  return names.map(group => groups[group])
 }
 
 function tooltipParamHandler(pm, command, callback) {
-  let tooltip = new Tooltip(pm, "center")
+  let tooltip = new Tooltip(pm.wrapper, "center")
   tooltip.open(paramForm(pm, command, params => {
     pm.focus()
     tooltip.close()
@@ -359,7 +377,6 @@ defineParamHandler("default", tooltipParamHandler)
 defineParamHandler("tooltip", tooltipParamHandler)
 
 // FIXME check for obsolete styles
-
 // insertCSS(`
 
 // .ProseMirror-menu {
@@ -395,7 +412,6 @@ defineParamHandler("tooltip", tooltipParamHandler)
 //   content: "︙";
 //   opacity: 0.5;
 //   padding: 0 4px;
-//   vertical-align: baseline;
 // }
 
 // .ProseMirror-select, .ProseMirror-select-menu {
@@ -407,7 +423,7 @@ defineParamHandler("tooltip", tooltipParamHandler)
 // .ProseMirror-select {
 //   padding: 1px 12px 1px 4px;
 //   display: inline-block;
-//   vertical-align: middle;
+//   vertical-align: 1px;
 //   position: relative;
 //   cursor: pointer;
 //   margin: 0 8px;

@@ -2,7 +2,7 @@ import {SchemaSpec, Schema, Block, Textblock, Inline, Text, Attribute, MarkType}
 
 // ;; #toc="Default schema" The default top-level document node type.
 export class Doc extends Block {
-  static get kind() { return "." }
+  static get kinds() { return "doc" }
 }
 
 // ;; #toc=false The default blockquote node type.
@@ -12,34 +12,37 @@ export class BlockQuote extends Block {}
 // `order`, which determines the number at which the list starts
 // counting, and defaults to 1.
 export class OrderedList extends Block {
-  static get contains() { return "list_item" }
+  get contains() { return "list_item" }
+  get isList() { return true }
+  get attrs() { new Attribute({default: "1"}) }
 }
-OrderedList.attributes = {order: new Attribute({default: "1"})}
 
 // ;; #toc=false The default bullet list node type.
 export class BulletList extends Block {
-  static get contains() { return "list_item" }
+  get contains() { return "list_item" }
+  get isList() { return true }
 }
 
 // ;; #toc=false The default list item node type.
 export class ListItem extends Block {
-  static get kind() { return "." }
+  static get kinds() { return "list_item" }
 }
 
 // ;; #toc=false The default horizontal rule node type.
 export class HorizontalRule extends Block {
-  static get contains() { return null }
+  get contains() { return null }
 }
 
 // ;; #toc=false The default heading node type. Has a single attribute
 // `level`, which indicates the heading level, and defaults to 1.
-export class Heading extends Textblock {}
-Heading.attributes = {level: new Attribute({default: "1"})}
+export class Heading extends Textblock {
+  get attrs() { return {level: new Attribute({default: "1"})} }
+}
 
 // ;; #toc=false The default code block / listing node type. Only
 // allows unmarked text nodes inside of it.
 export class CodeBlock extends Textblock {
-  static get contains() { return "text" }
+  get contains() { return "text" }
   get containsMarks() { return false }
   get isCode() { return true }
 }
@@ -55,11 +58,14 @@ export class Paragraph extends Textblock {
 // - **`src`** (required): The URL of the image.
 // - **`alt`**: The alt text.
 // - **`title`**: The title of the image.
-export class Image extends Inline {}
-Image.attributes = {
-  src: new Attribute,
-  alt: new Attribute({default: ""}),
-  title: new Attribute({default: ""})
+export class Image extends Inline {
+  get attrs() {
+    return {
+      src: new Attribute,
+      alt: new Attribute({default: ""}),
+      title: new Attribute({default: ""})
+    }
+  }
 }
 
 // ;; #toc=false The default hard break node type.
@@ -84,10 +90,12 @@ export class StrongMark extends MarkType {
 // - **`title`**: The link's title.
 export class LinkMark extends MarkType {
   static get rank() { return 53 }
-}
-LinkMark.attributes = {
-  href: new Attribute,
-  title: new Attribute({default: ""})
+  get attrs() {
+    return {
+      href: new Attribute,
+      title: new Attribute({default: ""})
+    }
+  }
 }
 
 // ;; #toc=false The default code font mark type.

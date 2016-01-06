@@ -1,6 +1,6 @@
 import {ProseMirror} from "../src/edit/main"
 import {Pos, Node, LinkStyle} from "../src/model"
-import {fromDOM} from "../src/parse/dom"
+import {fromDOM} from "../src/format"
 import {defaultSchema as schema} from "../src/model"
 
 import "../src/inputrules/autoinput"
@@ -43,7 +43,7 @@ function makeEditor(where, collab) {
   return new ProseMirror({
     place: document.querySelector(where),
     autoInput: true,
-    tooltipMenu: {emptyBlockMenu: true},
+    tooltipMenu: {selectedBlockMenu: true},
     menuBar: {float: true},
     doc: doc,
     collab: collab

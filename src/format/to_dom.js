@@ -1,7 +1,8 @@
 import {Text, BlockQuote, OrderedList, BulletList, ListItem,
         HorizontalRule, Paragraph, Heading, CodeBlock, Image, HardBreak,
         EmMark, StrongMark, LinkMark, CodeMark, Pos} from "../model"
-import {defineTarget} from "./index"
+
+import {defineTarget} from "./register"
 
 // ;; #toc=false Object used to to expose relevant values and methods
 // to DOM serializer functions.
@@ -32,10 +33,6 @@ class DOMSerializer {
 
   renderNode(node, offset) {
     let dom = node.type.serializeDOM(node, this)
-    for (let attr in node.type.attrs) {
-      let desc = node.type.attrs[attr]
-      if (desc.serializeDOM) desc.serializeDOM(dom, node.attrs[attr], this, node)
-    }
     if (this.options.onRender)
       dom = this.options.onRender(node, dom, offset) || dom
     return dom
@@ -90,12 +87,7 @@ class DOMSerializer {
   }
 
   renderMark(mark) {
-    let dom = mark.type.serializeDOM(mark, this)
-    for (let attr in mark.type.attrs) {
-      let desc = mark.type.attrs[attr]
-      if (desc.serializeDOM) desc.serializeDOM(dom, mark.attrs[attr], this)
-    }
-    return dom
+    return mark.type.serializeDOM(mark, this)
   }
 
   wrapInlineFlat(dom, marks) {
@@ -133,7 +125,7 @@ class DOMSerializer {
 // with the DOM node representing the node that the attribute applies
 // to and the atttribute's value, so that it can set additional DOM
 // attributes on the DOM node.
-export function toDOM(node, options = {}) {
+export function toDOM(node, options) {
   return new DOMSerializer(options).renderContent(node)
 }
 
@@ -143,7 +135,7 @@ defineTarget("dom", toDOM)
 // Serialize a given node to a DOM node. This is useful when you need
 // to serialize a part of a document, as opposed to the whole
 // document.
-export function renderNodeToDOM(node, options, offset) {
+export function nodeToDOM(node, options, offset) {
   let serializer = new DOMSerializer(options)
   let dom = serializer.renderNode(node, offset)
   if (node.isInline) {
@@ -173,7 +165,7 @@ function def(cls, method) { cls.prototype.serializeDOM = method }
 
 def(BlockQuote, (node, s) => s.renderAs(node, "blockquote"))
 
-BlockQuote.prototype.clicked = (_, path, dom, coords) => {
+BlockQuote.prototype.countCoordsAsChild = (_, path, dom, coords) => {
   let childBox = dom.firstChild.getBoundingClientRect()
   if (coords.left < childBox.left - 2) return Pos.from(path)
 }
@@ -182,7 +174,7 @@ def(BulletList, (node, s) => s.renderAs(node, "ul"))
 
 def(OrderedList, (node, s) => s.renderAs(node, "ol", {start: node.attrs.order != "1" && node.attrs.order}))
 
-OrderedList.prototype.clicked = BulletList.prototype.clicked = (_, path, dom, coords) => {
+OrderedList.prototype.countCoordsAsChild = BulletList.prototype.countCoordsAsChild = (_, path, dom, coords) => {
   for (let i = 0; i < dom.childNodes.length; i++) {
     let child = dom.childNodes[i]
     if (!child.hasAttribute("pm-offset")) continue

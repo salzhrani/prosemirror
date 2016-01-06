@@ -1,8 +1,9 @@
+import {Pos} from "../model"
 import {defineOption} from "../edit"
 import {elt/*, insertCSS*/} from "../dom"
-import {MenuUpdate} from "./update"
+import {Tooltip} from "../ui/tooltip"
+import {UpdateScheduler} from "../ui/update"
 
-import {Tooltip} from "./tooltip"
 import {Menu, TooltipDisplay, commandGroups} from "./menu"
 
 const classPrefix = "ProseMirror-tooltipmenu"
@@ -15,13 +16,11 @@ defineOption("tooltipMenu", false, function(pm, value) {
 class TooltipMenu {
   constructor(pm, config) {
     this.pm = pm
-    this.inlineItems = (config && config.inlineItems) || commandGroups(pm, "inline")
-    this.blockItems = (config && config.blockItems) || commandGroups(pm, "block")
     this.showLinks = config ? config.showLinks !== false : true
-    this.emptyBlockMenu = config && config.emptyBlockMenu
-    this.update = new MenuUpdate(pm, "change selectionChange blur", () => this.prepareUpdate())
+    this.selectedBlockMenu = config && config.selectedBlockMenu
+    this.update = new UpdateScheduler(pm, "change selectionChange blur commandsChanged", () => this.prepareUpdate())
 
-    this.tooltip = new Tooltip(pm, "above")
+    this.tooltip = new Tooltip(pm.wrapper, "above")
     this.menu = new Menu(pm, new TooltipDisplay(this.tooltip, () => this.update.force()))
   }
 
@@ -33,20 +32,22 @@ class TooltipMenu {
   prepareUpdate() {
     if (this.menu.active) return null
 
-    let {empty, node, head} = this.pm.selection, link
+    let {empty, node, from, to} = this.pm.selection, link
     if (!this.pm.hasFocus()) {
       return () => this.tooltip.close()
     } else if (node && node.isBlock) {
       let coords = topOfNodeSelection(this.pm)
-      return () => this.menu.show(this.blockItems, coords)
+      return () => this.menu.show(commandGroups(this.pm, "block"), coords)
     } else if (!empty) {
       let coords = node ? topOfNodeSelection(this.pm) : topCenterOfSelection()
-      return () => this.menu.show(this.inlineItems, coords)
-    } else if (this.emptyBlockMenu && this.pm.doc.path(head.path).size == 0) {
-      let coords = this.pm.coordsAtPos(head)
-      return () => this.menu.show(this.blockItems, coords)
+      let showBlock = this.selectedBlockMenu && Pos.samePath(from.path, to.path) &&
+          from.offset == 0 && to.offset == this.pm.doc.path(from.path).size
+      return () => this.menu.show(showBlock ? commandGroups(this.pm, "inline", "block") : commandGroups(this.pm, "inline"), coords)
+    } else if (this.selectedBlockMenu && this.pm.doc.path(from.path).size == 0) {
+      let coords = this.pm.coordsAtPos(from)
+      return () => this.menu.show(commandGroups(this.pm, "block"), coords)
     } else if (this.showLinks && (link = this.linkUnderCursor())) {
-      let coords = this.pm.coordsAtPos(head)
+      let coords = this.pm.coordsAtPos(from)
       return () => this.showLink(link, coords)
     } else {
       return () => this.tooltip.close()
@@ -66,11 +67,7 @@ class TooltipMenu {
   }
 }
 
-/**
- * Get the x and y coordinates at the top center of the current DOM selection.
- *
- * @return {Object}
- */
+// Get the x and y coordinates at the top center of the current DOM selection.
 function topCenterOfSelection() {
   let rects = window.getSelection().getRangeAt(0).getClientRects()
   let {left, right, top} = rects[0], i = 1
@@ -103,13 +100,13 @@ function topOfNodeSelection(pm) {
 //   padding: 0 5px;
 // }
 
-// .ProseMirror-tooltipmenu-linktext a {
+// .${classPrefix}-linktext a {
 //   color: white;
 //   text-decoration: none;
 //   padding: 0 5px;
 // }
 
-// .ProseMirror-tooltipmenu-linktext a:hover {
+// .${classPrefix}-linktext a:hover {
 //   text-decoration: underline;
 // }
 

@@ -42,11 +42,17 @@ export class SelectionState {
       } else if (!this.readUpdate() && ++n == 1) {
         this.pollTimeout = setTimeout(check, 50)
       } else {
-        this.pollState = null
-        this.pollToSync()
+        this.stopPollingForUpdate()
       }
     }
     this.pollTimeout = setTimeout(check, 20)
+  }
+
+  stopPollingForUpdate() {
+    if (this.pollState == "update") {
+      this.pollState = null
+      this.pollToSync()
+    }
   }
 
   domChanged() {
@@ -161,8 +167,7 @@ export class SelectionState {
   beforeStartOp() {
     if (this.pollState == "update" && this.readUpdate()) {
       clearTimeout(this.pollTimeout)
-      this.pollState = null
-      this.pollToSync()
+      this.stopPollingForUpdate()
     } else {
       this.syncDOM()
     }
@@ -278,14 +283,14 @@ export class NodeSelection extends Selection {
   }
 }
 
-function pathFromDOM(node) {
+function pathFromDOM(pm, node) {
   let path = []
-  for (;;) {
+  for (; node != pm.content;) {
     let attr = node.getAttribute("pm-offset")
-    if (!attr) return path
-    path.unshift(+attr)
+    if (attr) path.unshift(+attr)
     node = node.parentNode
   }
+  return path
 }
 
 function widthFromDOM(dom) {
@@ -316,7 +321,7 @@ function posFromDOMInner(pm, dom, domOffset, loose) {
     dom = parent
   }
 
-  let path = pathFromDOM(dom)
+  let path = pathFromDOM(pm, dom)
   if (dom.hasAttribute("pm-leaf"))
     return Pos.from(path, extraOffset + (domOffset ? 1 : 0))
 
@@ -409,13 +414,7 @@ function leafAt(node, offset) {
   }
 }
 
-/**
- * Get a DOM element at a given position in the document.
- *
- * @param {Node} parent The parent DOM node.
- * @param {Pos} pos     The position in the document.
- * @return {Object}     The DOM node and character offset inside the node.
- */
+// Get a DOM element at a given position in the document.
 function DOMFromPos(parent, pos) {
   let dom = resolvePath(parent, pos.path)
   let found = findByOffset(dom, pos.offset, true), inner
@@ -431,13 +430,7 @@ export function hasFocus(pm) {
   return sel.rangeCount && contains(pm.content, sel.anchorNode)
 }
 
-/**
- * Given an x,y position on the editor, get the position in the document.
- *
- * @param  {ProseMirror} pm     Editor instance.
- * @param  {Object}      coords The x, y coordinates.
- * @return {Pos}
- */
+// Given an x,y position on the editor, get the position in the document.
 // FIXME fails on the space between lines
 // FIXME reformulate as selectionAtCoords? So that it can't return null
 export function posAtCoords(pm, coords) {
@@ -462,14 +455,8 @@ function textRect(node, from, to) {
   return range.getBoundingClientRect()
 }
 
-/**
- * Given a position in the document model, get a bounding box of the character at
- * that position, relative to the window.
- *
- * @param  {ProseMirror} pm The editor instance.
- * @param  {Pos}         pos
- * @return {Object} The bounding box.
- */
+// Given a position in the document model, get a bounding box of the character at
+// that position, relative to the window.
 export function coordsAtPos(pm, pos) {
   let {node, offset} = DOMFromPos(pm.content, pos)
   let side, rect
@@ -610,19 +597,54 @@ export function findSelectionAtEnd(node, path = [], text) {
   return findSelectionIn(node, path.slice(), node.size, -1, text)
 }
 
+// ;; #path=NodeType #kind=class #noAnchor
+// You can add several properties to [node types](#NodeType) to
+// influence the way the editor interacts with them.
+
+// :: (node: Node, path: [number], dom: DOMNode, coords: {left: number, top: number}) → ?Pos
+// #path=NodeType.prototype.countCoordsAsChild
+// Specifies that, if this node is clicked, a child node might
+// actually be meant. This is used to, for example, make clicking a
+// list marker (which, in the DOM, is part of the list node) select
+// the list item it belongs to. Should return null if the given
+// coordinates don't refer to a child node, or the [position](#Pos)
+// before thechild otherwise.
+
 export function selectableNodeAbove(pm, dom, coords, liberal) {
   for (; dom && dom != pm.content; dom = dom.parentNode) {
     if (dom.hasAttribute("pm-offset")) {
-      let path = pathFromDOM(dom)
-      let node = pm.doc.path(path)
-      if (node.type.clicked) {
-        let result = node.type.clicked(node, path, dom, coords)
+      let path = pathFromDOM(pm, dom), node = pm.doc.path(path)
+      if (node.type.countCoordsAsChild) {
+        let result = node.type.countCoordsAsChild(node, path, dom, coords)
         if (result) return result
       }
       // Leaf nodes are implicitly clickable
       if ((liberal || node.type.contains == null) && node.type.selectable)
         return Pos.from(path)
-      return null
+      if (!liberal) return null
+    }
+  }
+}
+
+// :: (pm: ProseMirror, event: MouseEvent, path: [number], node: Node) → bool
+// #path=NodeType.prototype.handleClick
+// If a node is directly clicked (that is, the click didn't land in a
+// DOM node belonging to a child node), and its type has a
+// `handleClick` method, that method is given a chance to handle the
+// click. The method is called, and should return `false` if it did
+// _not_ handle the click.
+//
+// The `event` passed is the event for `"mousedown"`, but calling
+// `preventDefault` on it has no effect, since this method is only
+// called after a corresponding `"mouseup"` has occurred and
+// ProseMirror has determined that this is not a drag or multi-click
+// event.
+
+export function handleNodeClick(pm, event) {
+  for (let dom = event.target; dom && dom != pm.content; dom = dom.parentNode) {
+    if (dom.hasAttribute("pm-offset")) {
+      let path = pathFromDOM(pm, dom), node = pm.doc.path(path)
+      return node.type.handleClick && node.type.handleClick(pm, event, path, node) !== false
     }
   }
 }

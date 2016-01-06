@@ -2,7 +2,7 @@ import markdownit from "markdown-it"
 import {BlockQuote, OrderedList, BulletList, ListItem,
         HorizontalRule, Paragraph, Heading, CodeBlock, Image, HardBreak,
         EmMark, StrongMark, LinkMark, CodeMark, Mark} from "../model"
-import {defineSource} from "./index"
+import {defineSource} from "../format"
 
 // :: (Schema, string) → Node
 // Parse a string as [CommonMark](http://commonmark.org/) markup, and
@@ -20,7 +20,7 @@ export function fromMarkdown(schema, text) {
 // ;; #kind=interface #path=MarkdownParseSpec #toc=false
 // Schema-specific parsing logic can be defined by adding a
 // `parseMarkdown` property to the prototype of your node or mark
-// types, preferably using the type's [`register`](#NodeType.register)
+// types, preferably using the type's [`register`](#SchemaItem.register)
 // method, that contains an array of objects following this parsing
 // specification interface.
 
@@ -177,13 +177,9 @@ function summarizeTokens(schema) {
   tokens.inline = (state, tok) => state.parseTokens(tok.children)
   tokens.softbreak = state => state.addText("\n")
 
-  function read(type) {
-    let info = type.parseMarkdown
-    if (info) info.forEach(info => registerTokens(tokens, type, info))
-  }
-
-  for (let name in schema.nodes) read(schema.nodes[name])
-  for (let name in schema.marks) read(schema.marks[name])
+  schema.registry("parseMarkdown", (info, type) => {
+    registerTokens(tokens, type, info)
+  })
   return tokens
 }
 

@@ -1,8 +1,10 @@
 import {defineOption} from "../edit"
 import {elt/*, insertCSS*/} from "../dom"
-import {MenuUpdate} from "./update"
+import {UpdateScheduler} from "../ui/update"
 
 import {Menu, commandGroups} from "./menu"
+
+const prefix = "ProseMirror-menubar"
 
 defineOption("menuBar", false, function(pm, value) {
   if (pm.mod.menuBar) pm.mod.menuBar.detach()
@@ -26,12 +28,12 @@ class BarDisplay {
       current.style.position = "absolute"
       current.style.opacity = "0.5"
     }
-    let backButton = elt("div", {class: "ProseMirror-menubar-back"})
+    let backButton = elt("div", {class: prefix + "-back"})
     backButton.addEventListener("mousedown", e => {
       e.preventDefault(); e.stopPropagation()
       back()
     })
-    let added = elt("div", {class: "ProseMirror-menubar-sliding"}, backButton, dom)
+    let added = elt("div", {class: prefix + "-sliding"}, backButton, dom)
     this.container.appendChild(added)
     added.getBoundingClientRect() // Force layout for transition
     added.style.left = "0"
@@ -45,18 +47,17 @@ class MenuBar {
   constructor(pm, config) {
     this.pm = pm
 
-    this.menuElt = elt("div", {class: "ProseMirror-menubar-inner"})
-    this.wrapper = elt("div", {class: "ProseMirror-menubar"},
-                       elt("div", {class: "ProseMirror-menu", style: "visibility: hiffdden; z-index: 100"},
+    this.menuElt = elt("div", {class: prefix + "-inner"})
+    this.wrapper = elt("div", {class: prefix},
+                       elt("div", {class: "ProseMirror-menu"},
                            elt("span", {class: "ProseMirror-menuicon"},
                                elt("div", {class: "ProseMirror-icon"}, "x"))),
                        this.menuElt)
     pm.wrapper.insertBefore(this.wrapper, pm.wrapper.firstChild)
 
-    this.update = new MenuUpdate(pm, "selectionChange change activeMarkChange", () => this.prepareUpdate())
+    this.update = new UpdateScheduler(pm, "selectionChange change activeMarkChange commandsChanged", () => this.prepareUpdate())
     this.menu = new Menu(pm, new BarDisplay(this.menuElt, () => this.resetMenu()))
 
-    this.menuItems = config && config.items || commandGroups(pm, "inline", "block", "history")
     this.update.force()
 
     this.floating = false
@@ -89,7 +90,7 @@ class MenuBar {
   }
 
   resetMenu() {
-    this.menu.show(this.menuItems)
+    this.menu.show(commandGroups(this.pm, "inline", "block", "history"))
   }
 
   updateFloat() {
@@ -135,14 +136,14 @@ function findWrappingScrollable(node) {
 }
 
 // insertCSS(`
-// .ProseMirror-menubar {
+// .${prefix} {
 //   position: relative;
 //   margin-bottom: 3px;
 //   border-top-left-radius: inherit;
 //   border-top-right-radius: inherit;
 // }
 
-// .ProseMirror-menubar-inner {
+// .${prefix}-inner {
 //   color: #666;
 //   padding: 1px 6px;
 //   top: 0; left: 0; right: 0;
@@ -157,12 +158,12 @@ function findWrappingScrollable(node) {
 //   border-top-right-radius: inherit;
 // }
 
-// .ProseMirror-menubar .ProseMirror-icon-active {
+// .${prefix} .ProseMirror-icon-active {
 //   background: #eee;
 // }
 
-// .ProseMirror-menubar input[type="text"],
-// .ProseMirror-menubar textarea {
+// .${prefix} input[type="text"],
+// .${prefix} textarea {
 //   background: #eee;
 //   color: black;
 //   border: none;
@@ -172,24 +173,24 @@ function findWrappingScrollable(node) {
 //   box-sizing: border-box;
 // }
 
-// .ProseMirror-menubar input[type="text"] {
+// .${prefix} input[type="text"] {
 //   padding: 0 4px;
 // }
 
-// .ProseMirror-menubar form {
+// .${prefix} form {
 //   position: relative;
 //   padding: 2px 4px;
 // }
 
-// .ProseMirror-menubar .ProseMirror-blocktype {
+// .${prefix} .ProseMirror-blocktype {
 //   border: 1px solid #ccc;
 //   min-width: 4em;
 // }
-// .ProseMirror-menubar .ProseMirror-blocktype:after {
+// .${prefix} .ProseMirror-blocktype:after {
 //   color: #ccc;
 // }
 
-// .ProseMirror-menubar-sliding {
+// .${prefix}-sliding {
 //   -webkit-transition: left 0.2s ease-out;
 //   -moz-transition: left 0.2s ease-out;
 //   transition: left 0.2s ease-out;
@@ -202,7 +203,7 @@ function findWrappingScrollable(node) {
 //   background: white;
 // }
 
-// .ProseMirror-menubar-back {
+// .${prefix}-back {
 //   position: absolute;
 //   height: 100%;
 //   margin-top: -1px;
@@ -212,7 +213,7 @@ function findWrappingScrollable(node) {
 //   border-right: 1px solid silver;
 //   cursor: pointer;
 // }
-// .ProseMirror-menubar-back:after {
+// .${prefix}-back:after {
 //   content: "«";
 // }
 
