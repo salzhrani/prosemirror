@@ -2,14 +2,41 @@ import {defineOption} from "../edit"
 import {elt/*, insertCSS*/} from "../dom"
 import {UpdateScheduler} from "../ui/update"
 
-import {Menu, commandGroups} from "./menu"
+import {Menu, menuGroups} from "./menu"
 
 const prefix = "ProseMirror-menubar"
+
+// :: union<bool, Object> #path=menuBar #kind=option
+//
+// When given a truthy value, enables the menu bar module for this
+// editor. The menu bar takes up space above the editor, showing
+// currently available commands (that have been
+// [added](#CommandSpec.menuGroup) to the menu). To configure the
+// module, you can pass a configuration object, on which the following
+// properties are supported:
+//
+// **`float`**`: bool = false`
+//   : When enabled, causes the menu bar to stay visible when the
+//     editor is partially scrolled out of view, by making it float at
+//     the top of the viewport.
+//
+// **`groups`**`: [string] = ["inline", "block", "history"]`
+//   : Determines the menu groups that are shown in the menu bar.
+//
+// **`items`**`: [union<string, [string]>]`
+//   : Can be used to, rather than getting the commands to display
+//     from menu groups, explicitly provide the full list of commands.
+//     If nested arrays are used, separators will be shown between
+//     items from different arrays.
 
 defineOption("menuBar", false, function(pm, value) {
   if (pm.mod.menuBar) pm.mod.menuBar.detach()
   pm.mod.menuBar = value ? new MenuBar(pm, value) : null
 })
+
+function getItems(pm, items) {
+  return Array.isArray(items) ? items.map(getItems.bind(null, pm)) : pm.commands[items]
+}
 
 class BarDisplay {
   constructor(container, resetFunc) {
@@ -46,10 +73,12 @@ class BarDisplay {
 class MenuBar {
   constructor(pm, config) {
     this.pm = pm
+    this.config = config || {}
 
     this.menuElt = elt("div", {class: prefix + "-inner"})
     this.wrapper = elt("div", {class: prefix},
-                       elt("div", {class: "ProseMirror-menu"},
+                       // Dummy structure to reserve space for the menu
+                       elt("div", {class: "ProseMirror-menu", style: "visibility: hidden"},
                            elt("span", {class: "ProseMirror-menuicon"},
                                elt("div", {class: "ProseMirror-icon"}, "x"))),
                        this.menuElt)
@@ -61,7 +90,7 @@ class MenuBar {
     this.update.force()
 
     this.floating = false
-    if (config && config.float) {
+    if (this.config.float) {
       this.updateFloat()
       this.scrollFunc = () => {
         if (!document.body.contains(this.pm.wrapper))
@@ -90,7 +119,9 @@ class MenuBar {
   }
 
   resetMenu() {
-    this.menu.show(commandGroups(this.pm, "inline", "block", "history"))
+    this.menu.show(this.config.items
+                   ? getItems(this.pm, this.config.items)
+                   : menuGroups(this.pm, this.config.groups || ["inline", "block", "history"]))
   }
 
   updateFloat() {
@@ -144,6 +175,7 @@ function findWrappingScrollable(node) {
 // }
 
 // .${prefix}-inner {
+//   min-height: 1em;
 //   color: #666;
 //   padding: 1px 6px;
 //   top: 0; left: 0; right: 0;

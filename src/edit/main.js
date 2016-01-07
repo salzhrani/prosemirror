@@ -1,3 +1,4 @@
+import Keymap from "browserkeymap"
 import {Pos, findDiffStart} from "../model"
 import {Transform} from "../transform"
 import sortedInsert from "../util/sortedinsert"
@@ -16,7 +17,6 @@ import {Input} from "./input"
 import {History} from "./history"
 import {deriveKeymap, deriveCommands} from "./commands"
 import {RangeStore, MarkedRange} from "./range"
-import {normalizeKeyName} from "./keys"
 
 // ;; This is the class used to represent instances of the editor. A
 // ProseMirror editor holds a [document](#Node) and a
@@ -327,11 +327,12 @@ export class ProseMirror {
   }
 
   // :: (Keymap, ?number)
-  // Add a [keymap](#Keymap) to the editor. Keymaps added in this way
-  // are queried before the [base keymap](#keymap).
-  // The `rank` parameter can be used to control when they are queried
-  // relative to other maps added like this. Maps with a lower rank
-  // get queried first.
+  // Add a
+  // [keymap](https://github.com/marijnh/browserkeymap#an-object-type-for-keymaps)
+  // to the editor. Keymaps added in this way are queried before the
+  // [base keymap](#keymap). The `rank` parameter can be used to
+  // control when they are queried relative to other maps added like
+  // this. Maps with a lower rank get queried first.
   addKeymap(map, rank = 50) {
     sortedInsert(this.input.keymaps, {map, rank}, (a, b) => a.rank - b.rank)
   }
@@ -494,7 +495,7 @@ export class ProseMirror {
     if (!cmd) return this.commandKeys[name] = null
     let key = cmd.spec.key || (browser.mac ? cmd.spec.macKey : cmd.spec.pcKey)
     if (key) {
-      key = normalizeKeyName(Array.isArray(key) ? key[0] : key)
+      key = Keymap.normalizeKeyName(Array.isArray(key) ? key[0] : key)
       let deflt = keymap.bindings[key]
       if (Array.isArray(deflt) ? deflt.indexOf(name) > -1 : deflt == name)
         return this.commandKeys[name] = key
