@@ -1,3 +1,5 @@
+import Keymap from "browserkeymap"
+
 import {HardBreak, BulletList, OrderedList, ListItem, BlockQuote, Heading, Paragraph, CodeBlock, HorizontalRule,
         StrongMark, EmMark, CodeMark, LinkMark, Image, Pos, NodeType, MarkType} from "../model"
 import {joinPoint, joinableBlocks, canLift, canWrap} from "../transform"
@@ -5,7 +7,6 @@ import {browser} from "../dom"
 import sortedInsert from "../util/sortedinsert"
 
 import {charCategory, isExtendingChar} from "./char"
-import {Keymap} from "./keys"
 import {findSelectionFrom, verticalMotionLeavesTextblock, setDOMSelectionToPos, NodeSelection} from "./selection"
 
 const commands = Object.create(null)
@@ -14,7 +15,7 @@ const paramHandlers = Object.create(null)
 
 // :: (CommandSpec)
 // Define a globally available command. Note that
-// [namespaces](#namespace) can still be used to prevent the command
+// [namespaces](#include) can still be used to prevent the command
 // from showing up in editor where you don't want it to show up.
 export function defineCommand(spec) {
   if (commands[spec.name])
@@ -109,7 +110,7 @@ const empty = []
 // The name of the command, which will be its key in
 // `ProseMirror.commands`, and the thing passed to
 // [`execCommand`](#ProseMirror.execCommand). Can be
-// [namespaced](#namespaces), (and probably should, for user-defined
+// [namespaced](#include), (and probably should, for user-defined
 // commands).
 
 // :: string #path=CommandSpec.label
@@ -139,9 +140,10 @@ const empty = []
 
 // :: union<string, [string]> #path=CommandSpec.keys
 // The default key bindings for this command. May either be an array
-// of strings containing [key names](#FIXME), or an object with
-// optional `all`, `mac`, and `pc` properties, specifying arrays of
-// keys for different platforms.
+// of strings containing [key
+// names](https://github.com/marijnh/browserkeymap#a-string-notation-for-key-events),
+// or an object with optional `all`, `mac`, and `pc` properties,
+// specifying arrays of keys for different platforms.
 
 // :: union<bool, Object> #path=CommandSpec.derive
 // [Mark](#MarkType) and [node](#NodeType) types often need to define
@@ -154,8 +156,6 @@ const empty = []
 // For node types, you can derive `"insert"`, `"make"`, and `"wrap"`.
 //
 // For mark types, you can derive `"set"`, `"unset"`, and `"toggle"`.
-
-// FIXME document menu and icon properties
 
 // ;; #path=CommandParam #kind=interface #toc=false
 // The parameters that a command can take are specified using objects
@@ -323,7 +323,7 @@ StrongMark.register("command", {name: "unset", derive: true, label: "Unset stron
 //
 // **Keybindings:** Mod-B
 //
-// Registers itself in the inline [menu](#FIXME).
+// Registers itself in the inline [menu group](#CommandSpec.menuGroup).
 
 StrongMark.register("command", {
   name: "toggle",
@@ -358,7 +358,7 @@ EmMark.register("command", {name: "unset", derive: true, label: "Remove emphasis
 //
 // **Keybindings:** Mod-I
 //
-// Registers itself in the inline [menu](#FIXME).
+// Registers itself in the inline [menu group](#CommandSpec.menuGroup).
 
 EmMark.register("command", {
   name: "toggle",
@@ -393,7 +393,7 @@ CodeMark.register("command", {name: "unset", derive: true, label: "Remove code s
 //
 // **Keybindings:** Mod-`
 //
-// Registers itself in the inline [menu](#FIXME).
+// Registers itself in the inline [menu group](#CommandSpec.menuGroup).
 
 CodeMark.register("command", {
   name: "toggle",
@@ -414,7 +414,7 @@ CodeMark.register("command", {
 // only [select](#Command.select) itself when there is a link in the
 // selection or active marks.
 //
-// Registers itself in the inline [menu](#FIXME).
+// Registers itself in the inline [menu group](#CommandSpec.menuGroup).
 
 const linkIcon = {
   type: "icon",
@@ -442,7 +442,7 @@ LinkMark.register("command", {
 // **`title`**`: string`
 //   : The link's title.
 //
-// Adds itself to the inline [menu](#FIXME). Only selects itself when
+// Adds itself to the inline [menu group](#CommandSpec.menuGroup). Only selects itself when
 // `unlink` isn't selected, so that only one of the two is visible in
 // the menu at any time.
 
@@ -474,7 +474,7 @@ LinkMark.register("command", {
 // **`title`**`: string`
 //   : A title for the image.
 //
-// Registers itself in the inline [menu](#FIXME).
+// Registers itself in the inline [menu group](#CommandSpec.menuGroup).
 
 Image.register("command", {
   name: "insert",
@@ -776,7 +776,7 @@ function joinPointAbove(pm) {
 //
 // **Keybindings:** Alt-Up
 //
-// Registers itself in the block [menu](#FIXME)
+// Registers itself in the block [menu group](#CommandSpec.menuGroup)
 
 defineCommand({
   name: "joinUp",
@@ -829,7 +829,7 @@ defineCommand({
 //
 // **Keybindings:** Alt-Left
 //
-// Registers itself in the block [menu](#FIXME).
+// Registers itself in the block [menu group](#CommandSpec.menuGroup).
 
 defineCommand({
   name: "lift",
@@ -884,12 +884,12 @@ NodeType.deriveableCommands.wrap = conf => ({
 //
 // **Keybindings:** Alt-Right '*', Alt-Right '-'
 //
-// Registers itself in the block [menu](#FIXME).
+// Registers itself in the block [menu group](#CommandSpec.menuGroup).
 
 BulletList.register("command", {
   name: "wrap",
   derive: true,
-  labelName: "bullet list",
+  label: "Wrap the selection in a bullet list",
   menuGroup: "block(40)",
   display: {
     type: "icon",
@@ -904,12 +904,12 @@ BulletList.register("command", {
 //
 // **Keybindings:** Alt-Right '1'
 //
-// Registers itself in the block [menu](#FIXME).
+// Registers itself in the block [menu group](#CommandSpec.menuGroup).
 
 OrderedList.register("command", {
   name: "wrap",
   derive: true,
-  labelName: "ordered list",
+  label: "Wrap the selection in an ordered list",
   menuGroup: "block(41)",
   display: {
     type: "icon",
@@ -924,12 +924,12 @@ OrderedList.register("command", {
 //
 // **Keybindings:** Alt-Right '>', Alt-Right '"'
 //
-// Registers itself in the block [menu](#FIXME).
+// Registers itself in the block [menu group](#CommandSpec.menuGroup).
 
 BlockQuote.register("command", {
   name: "wrap",
   derive: true,
-  labelName: "block quote",
+  label: "Wrap the selection in a block quote",
   menuGroup: "block(45)",
   display: {
     type: "icon",
@@ -1155,7 +1155,7 @@ HorizontalRule.register("command", {
 // `type`, which should be a `{type: NodeType, attrs: ?Object}`
 // object, giving the new type and its attributes.
 //
-// Registers itself in the block [menu](#FIXME), where it creates the
+// Registers itself in the block [menu group](#CommandSpec.menuGroup), where it creates the
 // textblock type dropdown.
 
 defineCommand({
@@ -1228,7 +1228,7 @@ function nodeAboveSelection(pm) {
 //
 // **Keybindings:** Esc
 //
-// Registers itself in the block [menu](#FIXME).
+// Registers itself in the block [menu group](#CommandSpec.menuGroup).
 defineCommand({
   name: "selectParentNode",
   label: "Select parent node",
@@ -1382,7 +1382,7 @@ defineCommand({
 //
 // **Keybindings:** Mod-Z
 //
-// Registers itself in the history [menu](#FIXME).
+// Registers itself in the history [menu group](#CommandSpec.menuGroup).
 
 defineCommand({
   name: "undo",
@@ -1403,7 +1403,7 @@ defineCommand({
 //
 // **Keybindings:** Mod-Y, Shift-Mod-Z
 //
-// Registers itself in the history [menu](#FIXME).
+// Registers itself in the history [menu group](#CommandSpec.menuGroup).
 
 defineCommand({
   name: "redo",
