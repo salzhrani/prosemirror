@@ -2,11 +2,12 @@ import {Tooltip} from "../ui/tooltip"
 import {elt/*, insertCSS*/} from "../dom"
 import {defineParamHandler, Command} from "../edit"
 import sortedInsert from "../util/sortedinsert"
+import {AssertionError} from "../util/error"
 
 // import {getIcon} from "./icons"
 
 
-// ;; #path=CommandSpec #kind=interface #noAnchor #toc=false
+// ;; #path=CommandSpec #kind=interface #noAnchor
 // The `menu` module gives meaning to two additional properties of
 // [command specs](#CommandSpec).
 
@@ -40,10 +41,11 @@ import sortedInsert from "../util/sortedinsert"
 //     `"select"` parameters.
 
 export class Menu {
-  constructor(pm, display) {
+  constructor(pm, display, reset) {
     this.display = display
     this.stack = []
     this.pm = pm
+    this.resetHandler = reset
   }
 
   show(content, displayInfo) {
@@ -53,13 +55,14 @@ export class Menu {
 
   reset() {
     this.stack.length = 0
-    this.display.reset()
+    this.resetHandler()
   }
 
   enter(content, displayInfo) {
     let pieces = [], close = false, explore = value => {
       if (Array.isArray(value)) {
         for (let i = 0; i < value.length; i++) explore(value[i])
+        // FIXME only when something was added
         close = true
       } else if (!value.select || value.select(this.pm)) {
         if (close) {
@@ -95,23 +98,17 @@ export class Menu {
     if (this.stack.length)
       this.draw()
     else
-      this.display.reset()
+      this.resetHandler()
   }
 }
 
 export class TooltipDisplay {
-  constructor(tooltip, resetFunc) {
+  constructor(tooltip) {
     this.tooltip = tooltip
-    this.resetFunc = resetFunc
   }
 
   clear() {
     this.tooltip.close()
-  }
-
-  reset() {
-    if (this.resetFunc) this.resetFunc()
-    else this.clear()
   }
 
   show(dom, info) {
@@ -207,23 +204,24 @@ function renderItem(item, menu) {
     var display = item.spec.display
     if (display.type == "icon") return renderIcon(item, menu)
     else if (display.type == "param") return renderSelect(item, menu)
-    else throw new Error("Command " + item.name + " can not be shown in a menu")
+    else AssertionError.raise("Command " + item.name + " can not be shown in a menu")
   } else {
     return item.display(menu)
   }
 }
 
 function paramDefault(param, pm, command) {
-  return !param.default ? ""
-    : param.default.call ? param.default.call(command.self, pm)
-    : param.default
+  if (param.prefill) {
+    let prefill = param.prefill.call(command.self, pm)
+    if (prefill != null) return prefill
+  }
+  return param.default
 }
 
 function buildParamForm(pm, command) {
-  let prefill = command.spec.prefillParams && command.spec.prefillParams.call(command.self, pm)
   let fields = command.params.map((param, i) => {
     let field, name = "field_" + i
-    let val = prefill ? prefill[i] : paramDefault(param, pm, command)
+    let val = paramDefault(param, pm, command)
     if (param.type == "text")
       field = elt("input", {name, type: "text",
                             placeholder: param.label,
@@ -237,7 +235,7 @@ function buildParamForm(pm, command) {
       field = elt("div", {class: "ProseMirror-radio" + (param.name ? " ProseMirror-radio-" + param.name : '')}, (param.options.call ? param.options(pm) : param.options)
                   .map(o => elt("label", {'data-for': o.value}, [elt("input", {class: 'ProseMirror-radio-input', type: "radio", value: o.value, checked: o.value == val ? 'checked' : null, name}), o.label || ''])))
     else // FIXME more types
-      throw new Error("Unsupported parameter type: " + param.type)
+      AssertionError.raise("Unsupported parameter type: " + param.type)
     return elt("div", null, field)
   })
   return elt("form", null, fields)
@@ -392,9 +390,11 @@ function computeMenuGroups(pm) {
   return groups
 }
 
+const empty = []
+
 export function menuGroups(pm, names) {
   let groups = pm.mod.menuGroups || computeMenuGroups(pm)
-  return names.map(group => groups[group])
+  return names.map(group => groups[group] || empty)
 }
 
 function tooltipParamHandler(pm, command, callback) {

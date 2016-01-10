@@ -1,14 +1,15 @@
 import {Node, TextNode} from "./node"
 import {Fragment} from "./fragment"
 import {Mark} from "./mark"
+import {copyObj} from "../util/obj"
 
 import {ProseMirrorError} from "../util/error"
 
-// ;; #toc=false The exception type used to signal schema-related
+// ;; The exception type used to signal schema-related
 // errors.
 export class SchemaError extends ProseMirrorError {}
 
-// ;; #toc=false The [node](#NodeType) and [mark](#MarkType) types
+// ;; The [node](#NodeType) and [mark](#MarkType) types
 // that make up a schema have several things in common—they support
 // attributes, and you can [register](#SchemaItem.register) values
 // with them. This class implements this functionality, and acts as a
@@ -186,12 +187,11 @@ export class NodeType extends SchemaItem {
     return this.schema.subKind(type.contains, this.contains)
   }
 
-  // :: (NodeType) → [NodeType]
+  // :: (NodeType) → ?[NodeType]
   // Find a set of intermediate node types, possibly empty, that have
   // to be inserted between this type and `other` to put a node of
   // type `other` into this type.
   findConnection(other) {
-    // FIXME somehow define an order in which these are tried
     if (this.canContainType(other)) return []
 
     let seen = Object.create(null)
@@ -263,7 +263,7 @@ export class NodeType extends SchemaItem {
   get containsMarks() { return false }
 }
 
-// ;; #toc=false Base type for block nodetypes.
+// ;; Base type for block nodetypes.
 export class Block extends NodeType {
   get contains() { return "block" }
   static get kinds() { return "block" }
@@ -280,7 +280,7 @@ export class Block extends NodeType {
   }
 }
 
-// ;; #toc=false Base type for textblock node types.
+// ;; Base type for textblock node types.
 export class Textblock extends Block {
   get contains() { return "inline" }
   get containsMarks() { return true }
@@ -288,13 +288,13 @@ export class Textblock extends Block {
   get canBeEmpty() { return true }
 }
 
-// ;; #toc=false Base type for inline node types.
+// ;; Base type for inline node types.
 export class Inline extends NodeType {
   static get kinds() { return "inline" }
   get isInline() { return true }
 }
 
-// ;; #toc=false The text node type.
+// ;; The text node type.
 export class Text extends Inline {
   get selectable() { return false }
   get isText() { return true }
@@ -316,13 +316,16 @@ export class Attribute {
   // settings for the attributes. The following settings are
   // supported:
   //
-  // **`default`**: `?string`
-  // : The default value for this attribute, to choose when no
-  //   explicit value is provided.
+  // **`default`**`: ?string`
+  //   : The default value for this attribute, to choose when no
+  //     explicit value is provided.
   //
-  // **`compute`**: `?(Fragment) → string`
-  // : A function that computes a default value for the attribute from
-  //   the node's content.
+  // **`compute`**`: ?(Fragment) → string`
+  //   : A function that computes a default value for the attribute from
+  //     the node's content.
+  //
+  // **`label`**`: ?string`
+  //   : A user-readable text label associated with the attribute.
   //
   // Attributes that have no default or compute property must be
   // provided whenever a node or mark of a type that has them is
@@ -330,6 +333,7 @@ export class Attribute {
   constructor(options = {}) {
     this.default = options.default
     this.compute = options.compute
+    this.label = options.label
   }
 }
 
@@ -407,22 +411,6 @@ export class MarkType extends SchemaItem {
 // Schema specifications are data structures that specify a schema --
 // a set of node types, their names, attributes, and nesting behavior.
 
-function copyObj(obj, f) {
-  let result = Object.create(null)
-  for (let prop in obj) result[prop] = f ? f(obj[prop]) : obj[prop]
-  return result
-}
-
-function overlayObj(obj, overlay) {
-  let copy = copyObj(obj)
-  for (let name in overlay) {
-    let value = overlay[name]
-    if (value == null) delete copy[name]
-    else copy[name] = value
-  }
-  return copy
-}
-
 // ;; A schema specification is a blueprint for an actual
 // `Schema`. It maps names to node and mark types, along
 // with extra information, such as additional attributes and changes
@@ -456,6 +444,16 @@ export class SchemaSpec {
     return new SchemaSpec(nodes ? overlayObj(this.nodes, nodes) : this.nodes,
                           marks ? overlayObj(this.marks, marks) : this.marks)
   }
+}
+
+function overlayObj(base, update) {
+  let copy = copyObj(base)
+  for (let name in update) {
+    let value = update[name]
+    if (value == null) delete copy[name]
+    else copy[name] = value
+  }
+  return copy
 }
 
 // ;; Each document is based on a single schema, which provides the
