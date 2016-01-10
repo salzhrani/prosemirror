@@ -76,16 +76,16 @@ class TooltipMenu {
   }
 
   items(inline, block) {
-    let items
-    if (!inline) items = []
-    else if (this.config.inlineItems) items = getItems(this.pm, this.config.inlineItems)
-    else items = menuGroups(this.pm, this.config.inlineGroups || ["inline"])
+    let itemsArr
+    if (!inline) itemsArr = []
+    else if (this.config.inlineItems) itemsArr = getItems(this.pm, this.config.inlineItems)
+    else itemsArr = menuGroups(this.pm, this.config.inlineGroups || ["inline"])
 
     if (block) {
-      if (this.config.blockItems) items = items.concat(getItems(this.pm, this.config.blockItems))
-      else items = items.concat(menuGroups(this.pm, this.config.blockGroups || ["block"]))
+      if (this.config.blockItems) itemsArr = itemsArr.concat(getItems(this.pm, this.config.blockItems))
+      else itemsArr = itemsArr.concat(menuGroups(this.pm, this.config.blockGroups || ["block"]))
     }
-    return items
+    return itemsArr
   }
 
   prepareUpdate() {
