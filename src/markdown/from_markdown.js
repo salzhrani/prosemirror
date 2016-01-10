@@ -3,6 +3,7 @@ import {BlockQuote, OrderedList, BulletList, ListItem,
         HorizontalRule, Paragraph, Heading, CodeBlock, Image, HardBreak,
         EmMark, StrongMark, LinkMark, CodeMark, Mark} from "../model"
 import {defineSource} from "../format"
+import {AssertionError} from "../util/error"
 
 // :: (Schema, string) → Node
 // Parse a string as [CommonMark](http://commonmark.org/) markup, and
@@ -17,7 +18,7 @@ export function fromMarkdown(schema, text) {
   return doc
 }
 
-// ;; #kind=interface #path=MarkdownParseSpec #toc=false
+// ;; #kind=interface #path=MarkdownParseSpec
 // Schema-specific parsing logic can be defined by adding a
 // `parseMarkdown` property to the prototype of your node or mark
 // types, preferably using the type's [`register`](#SchemaItem.register)
@@ -64,7 +65,7 @@ function maybeMerge(a, b) {
     return a.copy(a.text + b.text)
 }
 
-// ;; #toc=false Object used to track the context of a running parse,
+// ;; Object used to track the context of a running parse,
 // and to expose parsing-related methods to node-specific parsing
 // functions.
 class MarkdownParseState {
@@ -167,7 +168,7 @@ function registerTokens(tokens, type, info) {
   } else if (info.parse) {
     tokens[info.token] = info.parse.bind(type)
   } else {
-    throw new Error("Unrecognized markdown parsing spec: " + info)
+    AssertionError.raise("Unrecognized markdown parsing spec: " + info)
   }
 }
 

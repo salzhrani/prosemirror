@@ -5,6 +5,7 @@ import Keymap from "browserkeymap"
 import {Pos, findDiffStart} from "../model"
 import {Transform} from "../transform"
 import sortedInsert from "../util/sortedinsert"
+import {AssertionError} from "../util/error"
 import {Map} from "../util/map"
 import {eventMixin} from "../util/event"
 import {requestAnimationFrame, elt, browser, ensureCSSAdded} from "../dom"
@@ -14,11 +15,10 @@ import {toText, parseFrom, serializeTo} from "../format"
 import {parseOptions, initOptions, setOption} from "./options"
 import {SelectionState, TextSelection, NodeSelection,
         posAtCoords, coordsAtPos, scrollIntoView,
-        findSelectionAtStart, hasFocus} from "./selection"
+        findSelectionAtStart, hasFocus, SelectionError} from "./selection"
 import {draw, redraw} from "./draw"
 import {Input} from "./input"
 import {History} from "./history"
-import {deriveKeymap, deriveCommands} from "./commands"
 import {RangeStore, MarkedRange} from "./range"
 
 // ;; This is the class used to represent instances of the editor. A
@@ -76,7 +76,6 @@ export class ProseMirror {
     // The commands available in the editor.
     this.commands = null
     this.commandKeys = null
-    this.updateCommands()
     initOptions(this)
   }
 
@@ -92,31 +91,6 @@ export class ProseMirror {
   // :: (string) → any
   // Get the current value of the given [option](#edit_options).
   getOption(name) { return this.options[name] }
-
-  updateCommands() {
-    // :: () #path=ProseMirror#events#commandsChanging
-    // Fired before the set of commands for the editor is updated.
-    this.signal("commandsChanging")
-    this.commands = deriveCommands(this)
-    this.input.baseKeymap = deriveKeymap(this)
-    this.commandKeys = Object.create(null)
-    // :: () #path=ProseMirror#events#commandsChanged
-    // Fired when the set of commands for the editor is updated.
-    this.signal("commandsChanged")
-  }
-
-  // :: (string) → bool
-  // Test whether the given string corresponds to any of the
-  // [includes](#include) enabled for this editor.
-  isIncluded(name) {
-    for (let i = 0; i < this.options.include.length; i++) {
-      let ns = this.options.include[i]
-      let match = ns == "default"
-          ? name.indexOf(":") == -1
-          : name == ns || (name.indexOf(ns) == 0 && name.charAt(ns.length) == ":")
-      if (match) return true
-    }
-  }
 
   // :: Selection
   // Get the current selection.
@@ -139,10 +113,10 @@ export class ProseMirror {
     this.checkPos(pos, false)
     let parent = this.doc.path(pos.path)
     if (pos.offset >= parent.size)
-      throw new Error("Trying to set a node selection at the end of a node")
+      SelectionError.raise("Trying to set a node selection at the end of a node")
     let node = parent.child(pos.offset)
     if (!node.type.selectable)
-      throw new Error("Trying to select a non-selectable node")
+      SelectionError.raise("Trying to select a non-selectable node")
     this.input.maybeAbortComposition()
     this.sel.setAndSignal(new NodeSelection(pos, pos.move(1), node))
   }
@@ -167,7 +141,7 @@ export class ProseMirror {
 
   // :: (any, ?string)
   // Replace the editor's document. When `format` is given, it should
-  // be a [parsable format](#parse), and `value` should something in
+  // be a [parsable format](#format), and `value` should something in
   // that format. If not, `value` should be a `Node`.
   setContent(value, format) {
     if (format) value = parseFrom(this.schema, value, format)
@@ -177,14 +151,14 @@ export class ProseMirror {
   // :: (?string) → any
   // Get the editor's content in a given format. When `format` is not
   // given, a `Node` is returned. If it is given, it should be an
-  // existing [serialization format](#serialize).
+  // existing [serialization format](#format).
   getContent(format) {
     return format ? serializeTo(this.doc, format) : this.doc
   }
 
   setDocInner(doc) {
     if (doc.type != this.schema.nodes.doc)
-      throw new Error("Trying to set a document with a different schema")
+      AssertionError.raise("Trying to set a document with a different schema")
     // :: Node The current document.
     this.doc = doc
     this.ranges = new RangeStore(this)
@@ -242,7 +216,7 @@ export class ProseMirror {
   apply(transform, options = nullOptions) {
     if (transform.doc == this.doc) return false
     if (transform.docs[0] != this.doc && findDiffStart(transform.docs[0], this.doc))
-      throw new Error("Applying a transform that does not start with the current document")
+      AssertionError.raise("Applying a transform that does not start with the current document")
 
     this.updateDoc(transform.doc, transform, options.selection)
     // :: (Transform, Object) #path=ProseMirror#events#transform
@@ -260,7 +234,7 @@ export class ProseMirror {
   // must also fall within a textblock node.
   checkPos(pos, textblock) {
     if (!this.doc.isValidPos(pos, textblock))
-      throw new Error("Position " + pos + " is not valid in current document")
+      AssertionError.raise("Position " + pos + " is not valid in current document")
   }
 
   ensureOperation() {
@@ -306,7 +280,7 @@ export class ProseMirror {
       redrawn = true
     }
 
-    if ((redrawn || !op.sel.eq(this.sel.range)) && !this.input.composing)
+    if ((redrawn || !op.sel.eq(this.sel.range)) && !this.input.composing || op.focus)
       this.sel.toDOM(op.focus)
 
     if (op.scrollIntoView !== false)
@@ -333,7 +307,7 @@ export class ProseMirror {
   // Add a
   // [keymap](https://github.com/marijnh/browserkeymap#an-object-type-for-keymaps)
   // to the editor. Keymaps added in this way are queried before the
-  // [base keymap](#keymap). The `rank` parameter can be used to
+  // base keymap. The `rank` parameter can be used to
   // control when they are queried relative to other maps added like
   // this. Maps with a lower rank get queried first.
   addKeymap(map, rank = 50) {
@@ -539,6 +513,8 @@ export class ProseMirror {
   }
 }
 
+ProseMirror.prototype.apply.scroll = {scrollIntoView: true}
+
 export const DIRTY_RESCAN = 1, DIRTY_REDRAW = 2
 
 const nullOptions = {}
@@ -555,7 +531,7 @@ class Operation {
   }
 }
 
-// ;; #toc=false A selection-aware extension of `Transform`. Use
+// ;; A selection-aware extension of `Transform`. Use
 // `ProseMirror.tr` to create an instance.
 class EditorTransform extends Transform {
   constructor(pm) {

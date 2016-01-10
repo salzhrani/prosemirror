@@ -1,4 +1,5 @@
 import {Pos} from "../model"
+import {NamespaceError} from "../util/error"
 
 import {nullMap} from "./map"
 
@@ -11,7 +12,7 @@ export class Step {
   // type, and the shape of the positions and parameter should be
   // appropriate for that type.
   constructor(type, from, to, pos, param = null) {
-    if (!(type in steps)) throw new Error("Unknown step type: " + type)
+    if (!(type in steps)) NamespaceError.raise("Unknown step type: " + type)
     // :: string
     // The type of the step.
     this.type = type
@@ -128,7 +129,7 @@ export class Step {
   }
 }
 
-// ;; #toc=false Objects of this type are returned as the result of
+// ;; Objects of this type are returned as the result of
 // applying a transform step to a document.
 export class StepResult {
   constructor(doc, map = nullMap) {

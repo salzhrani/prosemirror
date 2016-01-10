@@ -1,4 +1,7 @@
 import {defaultSchema} from "../model"
+import {AssertionError} from "../util/error"
+
+import {CommandSet, updateCommands} from "./command"
 
 class Option {
   constructor(defaultValue, update, updateOnInit) {
@@ -52,38 +55,11 @@ defineOption("historyDepth", 100)
 // start a new history event. Defaults to 500.
 defineOption("historyEventDelay", 500)
 
-// :: Object<?CommandSpec> #path=commands #kind=option
-// Delete, add, or modify [commands](#ProseMirror.commands) associated
-// with this editor. The property names of the given object should
-// correspond to command [names](#CommandSpec.name), and their values
-// can be `null`, to disable a command, an object contain a `run`
-// property, to add a command, and an object without `run`, to extend
-// or reconfigure the existing command with that name. The latter can
-// be used to change, for example, the [key
-// bindings](#CommandSpec.keys) for a command or its appearance in the
-// menu.
-defineOption("commands", {}, pm => pm.updateCommands(), false)
-
-// :: [string] #path=include #kind=option
-// An array of included names or namespaces that are enabled for this
-// editor. These are used to filter [commands](#defineCommand) and
-// [input rules](#defineInputRule) so that you can define these
-// without having them show up in every editor.
-//
-// An item named `"space:name"` would only be included in the editor
-// if either the namespace `"space"` is included, or the full name
-// `"space:name"` is. Item names without a colon are considered part
-// of the `"default"` namespace. Commands and input rules associated
-// with schema [nodes](#NodeType) or [marks](#MarkType) will be
-// namespaced under `"schema:"` and then the name of the element they
-// are associated with, for example `"schema:horizontal_rule:insert"`.
-//
-// This option's default value is `["default", "schema"]`, including
-// all the ‘top level’ items and those associated with schema
-// elements, but nothing else.
-//
-// See also `ProseMirror.isInNamespace`.
-defineOption("include", ["default", "schema"], pm => pm.updateCommands(), false)
+// :: CommandSet #path=commands #kind=option
+// Specifies the set of [commands](#Command) available in the editor
+// (which in turn determines the base key bindings and items available
+// in the menus). Defaults to `CommandSet.default`.
+defineOption("commands", CommandSet.default, updateCommands)
 
 // :: string #path=commandParamHandler #kind=option
 // The name of the handler used to prompt the user for [command
@@ -121,7 +97,7 @@ export function initOptions(pm) {
 
 export function setOption(pm, name, value) {
   let desc = options[name]
-  if (desc.update === false) throw new Error("Option '" + name + "' can not be changed")
+  if (desc.update === false) AssertionError.raise("Option '" + name + "' can not be changed")
   let old = pm.options[name]
   pm.options[name] = value
   if (desc.update) desc.update(pm, value, old, false)

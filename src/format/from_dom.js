@@ -19,7 +19,7 @@ export function fromDOM(schema, dom, options) {
   return doc
 }
 
-// ;; #path=DOMParseSpec #kind=interface #toc=false
+// ;; #path=DOMParseSpec #kind=interface
 // To define the way [node](#NodeType) and [mark](#MarkType) types are
 // parsed, you can associate one or more DOM parsing specifications to
 // them using the [`register`](#SchemaItem.register) method with the
@@ -77,7 +77,7 @@ const blockElements = {
 
 const noMarks = []
 
-// ;; #toc=false A state object used to track context during a parse,
+// ;; A state object used to track context during a parse,
 // and to expose methods to custom parsing functions.
 class DOMParseState {
   constructor(schema, topNode, options) {
@@ -98,13 +98,16 @@ class DOMParseState {
 
   addDOM(dom) {
     if (dom.nodeType == 3) {
-      // FIXME define a coherent strategy for dealing with trailing, leading, and multiple spaces (this isn't one)
       let value = dom.nodeValue
       let top = this.top, last
       if (/\S/.test(value) || top.type.isTextblock) {
         value = value.replace(/\s+/g, " ")
-        if (/^\s/.test(value) && (last = top.content[top.content.length - 1]) &&
-            last.type.name == "text" && /\s$/.test(last.text))
+        // If this starts with whitespace, and there is either no node
+        // before it or a node that ends with whitespace, strip the
+        // leading space.
+        if (/^\s/.test(value) &&
+            (!(last = top.content[top.content.length - 1]) ||
+             (last.type.name == "text" && /\s$/.test(last.text))))
           value = value.slice(1)
         if (value)
           this.insertNode(this.schema.text(value, this.marks))
@@ -183,6 +186,9 @@ class DOMParseState {
 
   leave() {
     let top = this.stack.pop()
+    let last = top.content[top.content.length - 1]
+    if (last && last.isText && /\s$/.test(last.text))
+      top.content[top.content.length - 1] = last.copy(last.text.slice(0, last.text.length - 1))
     let node = top.type.createAutoFill(top.attrs, top.content)
     if (this.stack.length) this.insertNode(node)
     return node
