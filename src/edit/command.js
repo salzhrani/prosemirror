@@ -9,14 +9,12 @@ import {copyObj} from "../util/obj"
 
 import {baseCommands} from "./base_commands"
 
-const paramHandlers = Object.create(null)
-
 // ;; A command is a named piece of functionality that can be bound to
 // a key, shown in the menu, or otherwise exposed to the user.
 //
 // The commands available in a given editor are determined by the
 // `commands` option. By default, they come from the `baseCommands`
-// object and the commands [associated](#SchemaItem.register) with
+// object and the commands [registered](#SchemaItem.register) with
 // schema items. Registering a `CommandSpec` on a [node](#NodeType) or
 // [mark](#MarkType) type will cause that command to come into scope
 // in editors whose schema includes that item.
@@ -34,7 +32,7 @@ export class Command {
   // Execute this command. If the command takes
   // [parameters](#Command.params), they can be passed as second
   // argument here, or omitted, in which case a [parameter
-  // handler](#defineParamHandler) will be called to prompt the user
+  // handler](#commandParamHandler) will be called to prompt the user
   // for values.
   //
   // Returns the value returned by the command spec's [`run`
@@ -44,10 +42,14 @@ export class Command {
     let run = this.spec.run
     if (!this.params.length) return run.call(this.self, pm)
     if (params) return run.call(this.self, pm, ...params)
-    let handler = getParamHandler(pm)
+    let fromCx = contextParamHandler
+    let handler = fromCx || pm.options.commandParamHandler || defaultParamHandler
     if (!handler) return false
     handler(pm, this, params => {
-      if (params) run.call(this.self, pm, ...params)
+      if (params) {
+        if (fromCx) withParamHandler(fromCx, run.bind(this.self, pm, ...params))
+        else run.call(this.self, pm, ...params)
+      }
     })
   }
 
@@ -84,10 +86,10 @@ export class Command {
 
 const empty = []
 
-function deriveCommandSpec(type, spec) {
+function deriveCommandSpec(type, spec, name) {
   if (!spec.derive) return spec
   let conf = typeof spec.derive == "object" ? spec.derive : {}
-  let dname = conf.name || spec.name
+  let dname = conf.name || name
   let derive = type.constructor.deriveableCommands[dname]
   if (!derive) AssertionError.raise("Don't know how to derive command " + dname)
   let derived = derive.call(type, conf)
@@ -122,8 +124,8 @@ export class CommandSet {
       }
 
       if (set === "schema") {
-        schema.registry("command", (spec, type, name) => {
-          add(name + ":" + spec.name, deriveCommandSpec(type, spec), type)
+        schema.registry("command", (name, spec, type, typeName) => {
+          add(typeName + ":" + name, deriveCommandSpec(type, spec, name), type)
         })
       } else {
         for (let name in set) add(name, set[name])
@@ -175,14 +177,6 @@ CommandSet.default = CommandSet.empty.add("schema").add(baseCommands)
 // the command. The only property that _must_ appear in a command spec
 // is [`run`](#CommandSpec.run). You should probably also give your
 // commands a `label`.
-
-// :: string #path=CommandSpec.name
-// Commands defined by [registering](#SchemaItem.register) them on
-// schema items should include a `name` in the spec object. The final
-// name of the command (the thing passed to
-// [`execCommand`](#ProseMirror.execCommand)) will be this name
-// prefixed by the node or mark name and a colon (for example
-// `"image:insert"`).
 
 // :: string #path=CommandSpec.label
 // A user-facing label for the command. This will be used, among other
@@ -247,18 +241,30 @@ CommandSet.default = CommandSet.empty.add("schema").add(baseCommands)
 // the command's source item), tries to derive an initial value for
 // the parameter, or return null if it can't.
 
-// :: (string, (pm: ProseMirror, cmd: Command, callback: (?[any])))
-// Register a parameter handler, which is a function that prompts the
-// user to enter values for a command's [parameters](#CommandParam), and
-// calls a callback with the values received. See also the
-// [`commandParamHandler` option](#commandParamHandler).
-export function defineParamHandler(name, handler) {
-  paramHandlers[name] = handler
+let contextParamHandler = null
+
+// :: ((pm: ProseMirror, cmd: Command, callback: (?[any])), ())
+// Run `f`, overriding the current [command parameter handler](#commandParamHandler)
+// with `handler` for the dynamic scope of the function.
+
+export function withParamHandler(handler, f) {
+  let prev = contextParamHandler
+  contextParamHandler = handler
+  try { return f() }
+  finally { contextParamHandler = prev }
 }
 
-function getParamHandler(pm) {
-  let option = pm.options.commandParamHandler
-  if (option && paramHandlers[option]) return paramHandlers[option]
+let defaultParamHandler = null
+
+// :: ((pm: ProseMirror, cmd: Command, callback: (?[any])), bool)
+// Register a default [parameter handler](#commandParamHandler), which
+// is a function that prompts the user to enter values for a command's
+// [parameters](#CommandParam), and calls a callback with the values
+// received. If `override` is set to false, the new handler will be
+// ignored if another handler has already been defined.
+export function defineDefaultParamHandler(handler, override = true) {
+  if (!defaultParamHandler || override)
+    defaultParamHandler = handler
 }
 
 function deriveKeymap(pm) {
@@ -350,15 +356,13 @@ export function selectedNodeAttr(pm, type, name) {
 function deriveParams(type, params) {
   return params && params.map(param => {
     let attr = type.attrs[param.attr]
-    return {
-      label: param.label,
-      type: param.type || "text",
-      default: param.default || attr.default,
-      prefill: param.prefill ||
-        (type instanceof NodeType
-         ? function(pm) { return selectedNodeAttr(pm, this, param.attr) }
-         : function(pm) { return selectedMarkAttr(pm, this, param.attr) })
-    }
+    let obj = {type: "text",
+               default: attr.default,
+               prefill: type instanceof NodeType
+                 ? function(pm) { return selectedNodeAttr(pm, this, param.attr) }
+                 : function(pm) { return selectedMarkAttr(pm, this, param.attr) }}
+    for (let prop in param) obj[prop] = param[prop]
+    return obj
   })
 }
 

@@ -31,7 +31,7 @@ const classPrefix = "ProseMirror-tooltipmenu"
 //   : When enabled, and a whole block is selected or the cursor is
 //     inside an empty block, the block menu gets shown.
 //
-// **`inlineGroups`**`: [string] = ["inline"]`
+// **`inlineGroups`**`: [string] = ["inline", "insert"]`
 //   : The menu groups to show when displaying the menu for inline
 //     content.
 //
@@ -41,7 +41,7 @@ const classPrefix = "ProseMirror-tooltipmenu"
 //     nested arrays are used, separators will be shown between items
 //     from different arrays.
 //
-// **`blockGroups`**`: [string] = ["block"]`
+// **`blockGroups`**`: [string] = ["insert", "block"]`
 //   : The menu groups to show when displaying the menu for block
 //     content.
 //
@@ -64,52 +64,66 @@ class TooltipMenu {
 
     this.showLinks = this.config.showLinks !== false
     this.selectedBlockMenu = this.config.selectedBlockMenu
-    this.update = new UpdateScheduler(pm, "change selectionChange blur commandsChanged", () => this.prepareUpdate())
+    this.updater = new UpdateScheduler(pm, "change selectionChange blur commandsChanged", () => this.update())
+    this.onContextMenu = this.onContextMenu.bind(this)
+    pm.content.addEventListener("contextmenu", this.onContextMenu)
+    this.onMouseDown = () => { if (this.menu.active) this.menu.reset() }
+    pm.content.addEventListener("mousedown", this.onMouseDown)
 
     this.tooltip = new Tooltip(pm.wrapper, "above")
-    this.menu = new Menu(pm, new TooltipDisplay(this.tooltip), () => this.update.force())
+    this.menu = new Menu(pm, new TooltipDisplay(this.tooltip), () => this.updater.force())
   }
 
   detach() {
-    this.update.detach()
+    this.updater.detach()
     this.tooltip.detach()
+    this.pm.content.removeEventListener("contextmenu", this.onContextMenu)
+    this.pm.content.removeEventListener("mousedown", this.onMouseDown)
   }
 
   items(inline, block) {
-    let itemsArr
-    if (!inline) itemsArr = []
-    else if (this.config.inlineItems) itemsArr = getItems(this.pm, this.config.inlineItems)
-    else itemsArr = menuGroups(this.pm, this.config.inlineGroups || ["inline"])
+    let result
+    if (!inline) result = []
+    else if (this.config.inlineItems) result = getItems(this.pm, this.config.inlineItems)
+    else result = menuGroups(this.pm, this.config.inlineGroups || ["inline", "insert"])
 
     if (block) {
-      if (this.config.blockItems) itemsArr = itemsArr.concat(getItems(this.pm, this.config.blockItems))
-      else itemsArr = itemsArr.concat(menuGroups(this.pm, this.config.blockGroups || ["block"]))
+      if (this.config.blockItems) addIfNew(result, getItems(this.pm, this.config.blockItems))
+      else addIfNew(result, menuGroups(this.pm, this.config.blockGroups || ["insert", "block"]))
     }
-    return itemsArr
+    return result
   }
 
-  prepareUpdate() {
+  update() {
     if (this.menu.active) return null
 
     let {empty, node, from, to} = this.pm.selection, link
     if (!this.pm.hasFocus()) {
-      return () => this.tooltip.close()
+      this.tooltip.close()
     } else if (node && node.isBlock) {
-      let coords = topOfNodeSelection(this.pm)
-      return () => this.menu.show(this.items(false, true), coords)
+      return () => {
+        let coords = topOfNodeSelection(this.pm)
+        return () => this.menu.show(this.items(false, true), coords)
+      }
     } else if (!empty) {
-      let coords = node ? topOfNodeSelection(this.pm) : topCenterOfSelection()
-      let showBlock = this.selectedBlockMenu && Pos.samePath(from.path, to.path) &&
-          from.offset == 0 && to.offset == this.pm.doc.path(from.path).size
-      return () => this.menu.show(this.items(true, showBlock), coords)
+      return () => {
+        let coords = node ? topOfNodeSelection(this.pm) : topCenterOfSelection()
+        let showBlock = this.selectedBlockMenu && Pos.samePath(from.path, to.path) &&
+            from.offset == 0 && to.offset == this.pm.doc.path(from.path).size
+        return () => this.menu.show(this.items(true, showBlock), coords)
+      }
     } else if (this.selectedBlockMenu && this.pm.doc.path(from.path).size == 0) {
-      let coords = this.pm.coordsAtPos(from)
-      return () => this.menu.show(this.items(false, true), coords)
+      return () => {
+        let coords = this.pm.coordsAtPos(from)
+        return () => this.menu.show(this.items(false, true), coords)
+      }
     } else if (this.showLinks && (link = this.linkUnderCursor())) {
-      let coords = this.pm.coordsAtPos(from)
-      return () => this.showLink(link, coords)
+      return () => {
+        let coords = this.pm.coordsAtPos(from)
+        return () => this.showLink(link, coords)
+      }
     } else {
-      return () => this.tooltip.close()
+      this.tooltip.close()
     }
   }
 
@@ -123,6 +137,16 @@ class TooltipMenu {
   showLink(link, pos) {
     let node = elt("div", {class: classPrefix + "-linktext"}, elt("a", {href: link.attrs.href, title: link.attrs.title}, link.attrs.href))
     this.tooltip.open(node, pos)
+  }
+
+  onContextMenu(e) {
+    if (!this.pm.selection.empty) return
+    let pos = this.pm.posAtCoords({left: e.clientX, top: e.clientY})
+    if (!pos || !pos.isValid(this.pm.doc, true)) return
+
+    this.pm.setTextSelection(pos, pos)
+    this.pm.flush()
+    this.menu.show(this.items(true, false), topCenterOfSelection())
   }
 }
 
@@ -152,13 +176,12 @@ function topOfNodeSelection(pm) {
   return {left: Math.min((box.left + box.right) / 2, box.left + 20), top: box.top}
 }
 
-// insertCSS(`
-// .ProseMirror-inlinemenu-linktext a {
-//   color: white;
-//   text-decoration: none;
-//   padding: 0 5px;
-// }
+function addIfNew(array, elts) {
+  for (let i = 0; i < elts.length; i++)
+    if (array.indexOf(elts[i]) == -1) array.push(elts[i])
+}
 
+insertCSS(`
 // .${classPrefix}-linktext a {
 //   color: white;
 //   text-decoration: none;

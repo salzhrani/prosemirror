@@ -7,7 +7,7 @@ import {Map} from "../util/map"
 import {eventMixin} from "../util/event"
 import {requestAnimationFrame, elt, browser, ensureCSSAdded} from "../dom"
 
-import {toText, parseFrom, serializeTo} from "../format"
+import {parseFrom, serializeTo} from "../format"
 
 import {parseOptions, initOptions, setOption} from "./options"
 import {SelectionState, TextSelection, NodeSelection,
@@ -210,6 +210,8 @@ export class ProseMirror {
   //     [redraw](#ProseMirror.flush).
   //
   // Returns the transform, or `false` if there were no steps in it.
+  //
+  // Has the following property:
   apply(transform, options = nullOptions) {
     if (transform.doc == this.doc) return false
     if (transform.docs[0] != this.doc && findDiffStart(transform.docs[0], this.doc))
@@ -230,7 +232,7 @@ export class ProseMirror {
   // and throw an error otherwise. When `textblock` is true, the position
   // must also fall within a textblock node.
   checkPos(pos, textblock) {
-    if (!this.doc.isValidPos(pos, textblock))
+    if (!pos.isValid(this.doc, textblock))
       AssertionError.raise("Position " + pos + " is not valid in current document")
   }
 
@@ -280,6 +282,8 @@ export class ProseMirror {
     if ((redrawn || !op.sel.eq(this.sel.range)) && !this.input.composing || op.focus)
       this.sel.toDOM(op.focus)
 
+    // FIXME somehow schedule this relative to ui/update so that it
+    // doesn't cause extra layout
     if (op.scrollIntoView !== false)
       scrollIntoView(this, op.scrollIntoView)
     // :: () #path=ProseMirror#events#draw
@@ -287,16 +291,8 @@ export class ProseMirror {
     if (docChanged) this.signal("draw")
     // :: () #path=ProseMirror#events#flush
     // Fired when the editor has finished
-    // [flushing](#ProseMirror.flush) an update to the DOM. If you
-    // need to respond to this with a DOM update of your own, use this
-    // event to read layout from the DOM, and
-    // [`flushed`](#ProseMirror.event_flushed) to update the DOM.
+    // [flushing](#ProseMirror.flush) an update to the DOM.
     this.signal("flush")
-    // :: () #path=ProseMirror#events#flushed
-    // Fired when the editor has finished
-    // [flushing](#ProseMirror.flush) an update to the DOM, after
-    // [`flush`](#ProseMirror.event_flush) has fired.
-    this.signal("flushed")
     this.accurateSelection = false
   }
 
@@ -410,19 +406,6 @@ export class ProseMirror {
       return hasFocus(this)
   }
 
-  // :: () → Node
-  // Get the part of the document that falls within the selection.
-  get selectedDoc() {
-    let sel = this.selection
-    return this.doc.sliceBetween(sel.from, sel.to)
-  }
-
-  // :: () → string
-  // Get the text that falls within the selection.
-  get selectedText() {
-    return toText(this.selectedDoc)
-  }
-
   // :: ({top: number, left: number}) → ?Pos
   // If the given coordinates (which should be relative to the top
   // left corner of the window—not the page) fall within the editable
@@ -510,6 +493,9 @@ export class ProseMirror {
   }
 }
 
+// :: Object
+// The object `{scrollIntoView: true}`, which is a common argument to
+// pass to `ProseMirror.apply` or `EditorTransform.apply`.
 ProseMirror.prototype.apply.scroll = {scrollIntoView: true}
 
 export const DIRTY_RESCAN = 1, DIRTY_REDRAW = 2

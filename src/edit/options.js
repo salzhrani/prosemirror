@@ -61,11 +61,11 @@ defineOption("historyEventDelay", 500)
 // in the menus). Defaults to `CommandSet.default`.
 defineOption("commands", CommandSet.default, updateCommands)
 
-// :: string #path=commandParamHandler #kind=option
-// The name of the handler used to prompt the user for [command
-// parameters](#CommandParam). Only relevant when multiple such
-// handlers are loaded, and you want to choose between them.
-defineOption("commandParamHandler", "default")
+// :: (pm: ProseMirror, cmd: Command, callback: (?[any])) #path=commandParamHandler #kind=CommandParamHandler
+// The handler used to prompt the user for [command
+// parameters](#CommandParam). Null (the default) means to use the
+// [default handler](#defineDefaultParamHandler).
+defineOption("commandParamHandler", null)
 
 // :: ?string #path=label #kind=option
 // The label of the editor. When set, the editable DOM node gets an
@@ -97,6 +97,7 @@ export function initOptions(pm) {
 
 export function setOption(pm, name, value) {
   let desc = options[name]
+  if (desc === undefined) AssertionError.raise("Option '" + name + "' is not defined")
   if (desc.update === false) AssertionError.raise("Option '" + name + "' can not be changed")
   let old = pm.options[name]
   pm.options[name] = value
