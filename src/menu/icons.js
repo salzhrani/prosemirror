@@ -1,4 +1,4 @@
-import {insertCSS} from "../dom"
+// import {insertCSS} from "../dom"
 
 let svgCollection = null
 const svgBuilt = Object.create(null)
@@ -11,7 +11,7 @@ const prefix = "ProseMirror-icon"
 export function getIcon(name, data) {
   let node = document.createElement("div")
   node.className = prefix
-  if (data.path) {
+  if (false) {
     if (!svgBuilt[name]) buildSVG(name, data)
     let svg = node.appendChild(document.createElementNS(SVG, "svg"))
     svg.style.width = (data.width / data.height) + "em"
@@ -19,6 +19,7 @@ export function getIcon(name, data) {
     use.setAttributeNS(XLINK, "href", "#pm-icon-" + name)
   } else {
     node.appendChild(document.createElement("span")).textContent = data.text
+    node.setAttribute('data-name', name);
     if (data.css) node.firstChild.style.cssText = data.css
   }
   return node
@@ -39,25 +40,25 @@ function buildSVG(name, data) {
   svgBuilt[name] = true
 }
 
-insertCSS(`
-.${prefix} {
-  display: inline-block;
-  line-height: .8;
-  vertical-align: -2px; /* Compensate for padding */
-  padding: 2px 8px;
-  cursor: pointer;
-}
+// insertCSS(`
+// .${prefix} {
+//   display: inline-block;
+//   line-height: .8;
+//   vertical-align: -2px; /* Compensate for padding */
+//   padding: 2px 8px;
+//   cursor: pointer;
+// }
 
-.${prefix}-active {
-  background: #666;
-  border-radius: 4px;
-}
+// .${prefix}-active {
+//   background: #666;
+//   border-radius: 4px;
+// }
 
-.${prefix} svg {
-  fill: currentColor;
-  height: 1em;
-}
+// .${prefix} svg {
+//   fill: currentColor;
+//   height: 1em;
+// }
 
-.${prefix} span {
-  vertical-align: text-top;
-}`)
+// .${prefix} span {
+//   vertical-align: text-top;
+// }`)

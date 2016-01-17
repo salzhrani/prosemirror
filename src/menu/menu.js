@@ -261,10 +261,16 @@ paramTypes.select = {
 paramTypes.radio = {
   render(param, value) {
     let options = param.options.call ? param.options(this) : param.options
-    return elt("div", {class: "ProseMirror-radio" + (param.name ? " ProseMirror-radio-" + param.name : '')}, options.map(o => elt("label", {'data-for': o.value}, [elt("input", {class: 'ProseMirror-radio-input', type: "radio", value: o.value, checked: o.value == val ? 'checked' : null, name}), o.label || ''])))
+    return elt("div",
+      {class: "ProseMirror-radio" + (param.name ? " ProseMirror-radio-" + param.name : '')},
+      options.map(o => {
+        let el = elt("label", {'data-for': o.value}, [elt("input", {class: 'ProseMirror-radio-input', type: "radio", value: o.value, name: param.name}), o.label || ''])
+        el.checked = o.value == value
+        return el;
+      }))
   },
   read(dom) {
-    let checked = dom.querySelector('[checked]');
+    let checked = dom.querySelector('input:checked');
     return checked && checked.value
   }
 }
@@ -306,7 +312,7 @@ function paramForm(pm, command, callback) {
     // FIXME error messages
     finish(gatherParams(pm, command, form))
   }
-  form.addEventListener("submit", e => {
+  form.addEventListener(command.spec.onChange ? "change" : "submit", e => {
     e.preventDefault()
     submit()
   })
@@ -333,20 +339,6 @@ export function readParams(command, callback) {
       menu.pm.focus()
       if (params) {
         callback(params)
-        menu.reset()
-      } else {
-        menu.leave()
-      }
-    })
-  }}
-}
-
-export function readRadioParams(command) {
-  return {display(menu) {
-    return radioForm(menu.pm, command, params => {
-      menu.pm.focus()
-      if (params) {
-        command.exec(menu.pm, params)
         menu.reset()
       } else {
         menu.leave()

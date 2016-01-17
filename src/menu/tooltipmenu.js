@@ -181,7 +181,7 @@ function addIfNew(array, elts) {
     if (array.indexOf(elts[i]) == -1) array.push(elts[i])
 }
 
-insertCSS(`
+// insertCSS(`
 // .${classPrefix}-linktext a {
 //   color: white;
 //   text-decoration: none;
