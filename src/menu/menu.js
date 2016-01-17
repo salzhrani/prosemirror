@@ -1,10 +1,12 @@
 import {Tooltip} from "../ui/tooltip"
 import {elt, insertCSS} from "../dom"
-import {defineParamHandler, Command} from "../edit"
+import {defineDefaultParamHandler, withParamHandler, Command} from "../edit"
 import sortedInsert from "../util/sortedinsert"
 import {AssertionError} from "../util/error"
 
 import {getIcon} from "./icons"
+
+const prefix = "ProseMirror-menu"
 
 // ;; #path=CommandSpec #kind=interface #noAnchor
 // The `menu` module gives meaning to two additional properties of
@@ -45,6 +47,7 @@ export class Menu {
     this.stack = []
     this.pm = pm
     this.resetHandler = reset
+    this.cssHint = ""
   }
 
   show(content, displayInfo) {
@@ -59,17 +62,19 @@ export class Menu {
 
   enter(content, displayInfo) {
     let pieces = [], close = false, explore = value => {
+      let added = false
       if (Array.isArray(value)) {
-        for (let i = 0; i < value.length; i++) explore(value[i])
-        // FIXME only when something was added
-        close = true
+        for (let i = 0; i < value.length; i++) added = explore(value[i]) || added
+        if (added) close = true
       } else if (!value.select || value.select(this.pm)) {
         if (close) {
           pieces.push(separator)
           close = false
         }
         pieces.push(value)
+        added = true
       }
+      return added
     }
     explore(content)
 
@@ -85,7 +90,7 @@ export class Menu {
 
   draw(displayInfo) {
     let cur = this.stack[this.stack.length - 1]
-    let rendered = elt("div", {class: "ProseMirror-menu"}, cur.map(item => renderItem(item, this)))
+    let rendered = elt("div", {class: prefix}, cur.map(item => renderItem(item, this)))
     if (this.stack.length > 1)
       this.display.enter(rendered, () => this.leave(), displayInfo)
     else
@@ -94,10 +99,10 @@ export class Menu {
 
   leave() {
     this.stack.pop()
-    if (this.stack.length)
-      this.draw()
+    if (this.display.leave)
+      this.display.leave()
     else
-      this.resetHandler()
+      this.draw()
   }
 }
 
@@ -125,29 +130,30 @@ export class TooltipDisplay {
 }
 
 function title(pm, command) {
-  let key = pm.keyForCommand(command.name)
+  if (!command.label) return null
+  let key = command.name && pm.keyForCommand(command.name)
   return key ? command.label + " (" + key + ")" : command.label
+}
+
+function execInMenu(menu, command, params) {
+  withParamHandler((_, command, callback) => {
+    menu.enter(readParams(command, callback))
+  }, () => {
+    command.exec(menu.pm, params)
+  })
 }
 
 function renderIcon(command, menu) {
   let icon = getIcon(command.name, command.spec.display)
   if (command.active(menu.pm)) icon.className += " ProseMirror-icon-active"
-  let dom = elt("span", {class: "ProseMirror-menuicon", title: title(menu.pm, command)}, icon)
-  dom.addEventListener("mousedown", e => {
+  icon.addEventListener("mousedown", e => {
     e.preventDefault(); e.stopPropagation()
-    if (!command.params.length) {
-      command.exec(menu.pm)
-      menu.reset()
-    } else if (command.params.length == 1 && command.params[0].type == "select") {
-      showSelectMenu(menu.pm, command, dom)
-    } else {
-      menu.enter(readParams(command))
-    }
+    execInMenu(menu, command)
   })
-  return dom
+  return icon
 }
 
-function renderSelect(item, menu) {
+function renderDropDown(item, menu) {
   let param = item.params[0]
   let deflt = paramDefault(param, menu.pm, item)
   if (deflt != null) {
@@ -158,30 +164,32 @@ function renderSelect(item, menu) {
     }
   }
 
-  let dom = elt("div", {class: "ProseMirror-select ProseMirror-select-command-" + item.name, title: item.label},
+  let dom = elt("div", {class: "ProseMirror-dropdown ProseMirror-dropdown-command-" + item.name, title: item.label},
                 !deflt ? (param.defaultLabel || "Select...") : deflt.display ? deflt.display(deflt) : deflt.label)
+  let open = null
   dom.addEventListener("mousedown", e => {
     e.preventDefault(); e.stopPropagation()
-    showSelectMenu(menu.pm, item, dom)
+    if (open && open()) open = null
+    else open = expandDropDown(menu, item, dom)
   })
   return dom
 }
 
-export function showSelectMenu(pm, item, dom) {
-  let param = item.params[0]
+export function expandDropDown(menu, item, dom) {
+  let param = item.params[0], pm = menu.pm
   let options = param.options.call ? param.options(pm) : param.options
-  let menu = elt("div", {class: "ProseMirror-select-menu"}, options.map(o => {
+  let menuDOM = elt("div", {class: "ProseMirror-dropdown-menu " + menu.cssHint}, options.map(o => {
     let dom = elt("div", null, o.display ? o.display(o) : o.label)
     dom.addEventListener("mousedown", e => {
       e.preventDefault()
-      item.exec(pm, [o.value])
+      execInMenu(menu, item, [o.value])
       finish()
     })
     return dom
   }))
   let pos = dom.getBoundingClientRect(), box = pm.wrapper.getBoundingClientRect()
-  menu.style.left = (pos.left - box.left - 2) + "px"
-  menu.style.top = (pos.top - box.top - 2) + "px"
+  menuDOM.style.left = (pos.left - box.left) + "px"
+  menuDOM.style.top = (pos.bottom - box.top) + "px"
 
   let done = false
   function finish() {
@@ -189,22 +197,27 @@ export function showSelectMenu(pm, item, dom) {
     done = true
     document.body.removeEventListener("mousedown", finish)
     document.body.removeEventListener("keydown", finish)
-    pm.wrapper.removeChild(menu)
+    pm.wrapper.removeChild(menuDOM)
+    return true
   }
   document.body.addEventListener("mousedown", finish)
   document.body.addEventListener("keydown", finish)
-  pm.wrapper.appendChild(menu)
+  pm.wrapper.appendChild(menuDOM)
+  return finish
 }
 
 function renderItem(item, menu) {
+  let dom
   if (item instanceof Command) {
     var display = item.spec.display
-    if (display.type == "icon") return renderIcon(item, menu)
-    else if (display.type == "param") return renderSelect(item, menu)
+    if (display.type == "icon") dom = renderIcon(item, menu)
+    else if (display.type == "param") dom = renderDropDown(item, menu)
     else AssertionError.raise("Command " + item.name + " can not be shown in a menu")
   } else {
-    return item.display(menu)
+    dom = item.display(menu)
   }
+  return elt("span", {class: prefix + "item", title: title(menu.pm, item)}, dom)
+
 }
 
 function paramDefault(param, pm, command) {
@@ -215,20 +228,42 @@ function paramDefault(param, pm, command) {
   return param.default
 }
 
+// :: Object<{render: (param: CommandParam, value: any) → DOMNode, read: (node: DOMNode) → any}>
+// A collection of default renderers and readers for [parameter
+// types](#CommandParam.type), which [parameter
+// handlers](#commandParamHandler) can optionally use to prompt for
+// parameters. `render` should create a form field for the parameter,
+// and `read` should, given that field, return its value.
+export const paramTypes = Object.create(null)
+
+paramTypes.text = {
+  render(param, value) {
+    return elt("input", {type: "text",
+                         placeholder: param.label,
+                         value,
+                         autocomplete: "off"})
+  },
+  read(dom) {
+    return dom.value
+  }
+}
+
+paramTypes.select = {
+  render(param, value) {
+    let options = param.options.call ? param.options(this) : param.options
+    return elt("select", null, options.map(o => elt("option", {value: o.value, selected: o == value}, o.label)))
+  },
+  read(dom) {
+    return dom.value
+  }
+}
+
 function buildParamForm(pm, command) {
   let fields = command.params.map((param, i) => {
-    let field, name = "field_" + i
-    let val = paramDefault(param, pm, command)
-    if (param.type == "text")
-      field = elt("input", {name, type: "text",
-                            placeholder: param.label,
-                            value: val,
-                            autocomplete: "off"})
-    else if (param.type == "select")
-      field = elt("select", {name}, (param.options.call ? param.options(pm) : param.options)
-                  .map(o => elt("option", {value: o.value, selected: o == val}, o.label)))
-    else // FIXME more types
+    if (!(param.type in paramTypes))
       AssertionError.raise("Unsupported parameter type: " + param.type)
+    let field = paramTypes[param.type].render.call(pm, param, paramDefault(param, pm, command))
+    field.setAttribute("data-field", i)
     return elt("div", null, field)
   })
   return elt("form", null, fields)
@@ -237,7 +272,8 @@ function buildParamForm(pm, command) {
 function gatherParams(pm, command, form) {
   let bad = false
   let params = command.params.map((param, i) => {
-    let val = form.elements["field_" + i].value
+    let dom = form.querySelector("[data-field=\"" + i + "\"]")
+    let val = paramTypes[param.type].read.call(pm, dom)
     if (val) return val
     if (param.default == null) bad = true
     else return paramDefault(param, pm, command)
@@ -280,12 +316,12 @@ function paramForm(pm, command, callback) {
   return form
 }
 
-export function readParams(command) {
+export function readParams(command, callback) {
   return {display(menu) {
     return paramForm(menu.pm, command, params => {
       menu.pm.focus()
       if (params) {
-        command.exec(menu.pm, params)
+        callback(params)
         menu.reset()
       } else {
         menu.leave()
@@ -295,7 +331,7 @@ export function readParams(command) {
 }
 
 const separator = {
-  display() { return elt("div", {class: "ProseMirror-menuseparator"}) }
+  display() { return elt("span", {class: prefix + "separator"}) }
 }
 
 function menuRank(cmd) {
@@ -336,20 +372,19 @@ function tooltipParamHandler(pm, command, callback) {
   }))
 }
 
-defineParamHandler("default", tooltipParamHandler)
-defineParamHandler("tooltip", tooltipParamHandler)
+defineDefaultParamHandler(tooltipParamHandler, false)
 
 // FIXME check for obsolete styles
 insertCSS(`
 
-.ProseMirror-menu {
+.${prefix} {
   margin: 0 -4px;
   line-height: 1;
-  white-space: pre;
 }
-.ProseMirror-tooltip .ProseMirror-menu {
+.ProseMirror-tooltip .${prefix} {
   width: -webkit-fit-content;
   width: fit-content;
+  white-space: pre;
 }
 
 .ProseMirror-tooltip-back-wrapper {
@@ -364,57 +399,52 @@ insertCSS(`
   content: "«";
 }
 
-.ProseMirror-menuicon {
-  margin: 0 7px;
-}
-
-.ProseMirror-menuseparator {
+.${prefix}item {
+  margin-right: 3px;
   display: inline-block;
 }
-.ProseMirror-menuseparator:after {
-  content: "︙";
-  opacity: 0.5;
-  padding: 0 4px;
+
+.${prefix}separator {
+  border-right: 1px solid #666;
 }
 
-.ProseMirror-select, .ProseMirror-select-menu {
-  border: 1px solid #777;
-  border-radius: 3px;
+.ProseMirror-dropdown, .ProseMirror-dropdown-menu {
   font-size: 90%;
 }
 
-.ProseMirror-select {
-  padding: 1px 12px 1px 4px;
+.ProseMirror-dropdown {
+  padding: 1px 14px 1px 4px;
   display: inline-block;
   vertical-align: 1px;
   position: relative;
   cursor: pointer;
-  margin: 0 8px;
 }
 
-.ProseMirror-select-command-textblockType {
-  min-width: 3.2em;
-}
-
-.ProseMirror-select:after {
-  content: "▿";
-  color: #777;
+.ProseMirror-dropdown:after {
+  content: "⏷";
+  font-size: 90%;
+  opacity: .6;
   position: absolute;
-  right: 4px;
+  right: 2px;
 }
 
-.ProseMirror-select-menu {
+.ProseMirror-dropdown-command-textblockType {
+  min-width: 3em;
+}
+
+.ProseMirror-dropdown-menu {
   position: absolute;
   background: #444;
   color: white;
-  padding: 2px 2px;
+  padding: 2px;
   z-index: 15;
+  min-width: 6em;
 }
-.ProseMirror-select-menu div {
+.ProseMirror-dropdown-menu div {
   cursor: pointer;
-  padding: 0 1em 0 2px;
+  padding: 2px 8px 2px 4px;
 }
-.ProseMirror-select-menu div:hover {
+.ProseMirror-dropdown-menu div:hover {
   background: #777;
 }
 
