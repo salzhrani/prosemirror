@@ -105,6 +105,14 @@ class SchemaItem {
   static registerComputed(namespace, name, f) {
     this.getNamespace(namespace)[name] = f
   }
+
+  // :: (string)
+  // By default, schema items inherit the
+  // [registered](#SchemaItem.register) items from their superclasses.
+  // Call this to disable that behavior for the given namespace.
+  static cleanNamespace(namespace) {
+    this.getNamespace(namespace).__proto__ = null
+  }
 }
 
 // ;; Node types are objects allocated once per `Schema`
@@ -609,7 +617,7 @@ export class Schema {
     }
   }
 
-  // :: (string, (value: *, source: union<NodeType, MarkType>, name: string))
+  // :: (string, (value: *, source: union<NodeType, MarkType>, name: string), ?bool)
   // Retrieve all registered items under the given name from this
   // schema. The given function will be called with each item, the
   // element—node type or mark type—that it was associated with, and
