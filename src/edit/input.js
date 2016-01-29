@@ -1,13 +1,13 @@
 import Keymap from "browserkeymap"
 import {Pos} from "../model"
 import {knownSource, parseFrom, fromHTML, fromText, toHTML, toText} from "../format"
-import {elt} from "../dom"
 
 import {captureKeys} from "./capturekeys"
-import {browser, addClass, rmClass} from "../dom"
+import {elt, browser, addClass, rmClass} from "../dom"
+
 import {applyDOMChange, textContext, textInContext} from "./domchange"
-import {TextSelection, coordsAtPos, rangeFromDOMLoose, selectableNodeAbove,
-        findSelectionAtStart, findSelectionAtEnd, handleNodeClick} from "./selection"
+import {TextSelection, rangeFromDOMLoose, findSelectionAtStart, findSelectionAtEnd} from "./selection"
+import {coordsAtPos, pathFromDOM, handleNodeClick, selectableNodeAbove} from "./dompos"
 
 let stopSeq = null
 
@@ -25,6 +25,7 @@ export class Input {
     // When the user is creating a composed character,
     // this is set to a Composing instance.
     this.composing = null
+    this.mouseDown = null
     this.shiftKey = this.updatingComposition = false
     this.skipInput = 0
 
@@ -168,60 +169,94 @@ function selectClickedNode(pm, e) {
 
 let lastClick = 0, oneButLastClick = 0
 
-handlers.mousedown = (pm, e) => {
-  pm.sel.pollForUpdate()
+function handleTripleClick(pm, e) {
+  e.preventDefault()
+  let pos = selectableNodeAbove(pm, e.target, {left: e.clientX, top: e.clientY}, true)
+  if (pos) {
+    let node = pm.doc.nodeAfter(pos)
+    if (node.isBlock && !node.isTextblock) {
+      pm.setNodeSelection(pos)
+    } else {
+      let path = node.isInline ? pos.path : pos.toPath()
+      if (node.isInline) node = pm.doc.path(path)
+      pm.setTextSelection(new Pos(path, 0), new Pos(path, node.size))
+    }
+    pm.focus()
+  }
+}
 
+handlers.mousedown = (pm, e) => {
   let now = Date.now(), doubleClick = now - lastClick < 500, tripleClick = now - oneButLastClick < 600
   oneButLastClick = lastClick
   lastClick = now
-  if (tripleClick) {
-    e.preventDefault()
-    let pos = selectableNodeAbove(pm, e.target, {left: e.clientX, top: e.clientY}, true)
-    if (pos) {
-      let node = pm.doc.nodeAfter(pos)
-      if (node.isBlock && !node.isTextblock) {
-        pm.setNodeSelection(pos)
-      } else {
-        let path = node.isInline ? pos.path : pos.toPath()
-        if (node.isInline) node = pm.doc.path(path)
-        pm.setTextSelection(new Pos(path, 0), new Pos(path, node.size))
-      }
-      pm.focus()
-    }
-    return
-  }
-  let leaveToBrowser = pm.input.shiftKey || doubleClick
 
-  let x = e.clientX, y = e.clientY
-  let up = () => {
-    removeEventListener("mouseup", up)
-    removeEventListener("mousemove", move)
+  if (tripleClick) handleTripleClick(pm, e)
+  else pm.input.mouseDown = new MouseDown(pm, e, doubleClick)
+}
 
-    if (leaveToBrowser) {
-      pm.sel.pollForUpdate()
-    } else if (e.ctrlKey) {
-      selectClickedNode(pm, e)
-    } else if (!handleNodeClick(pm, e)) {
-      let pos = selectableNodeAbove(pm, e.target, {left: e.clientX, top: e.clientY})
-      if (pos) {
-        pm.setNodeSelection(pos)
-        pm.focus()
-      } else {
-        pm.sel.pollForUpdate()
-      }
+class MouseDown {
+  constructor(pm, event, doubleClick) {
+    this.pm = pm
+    this.event = event
+    this.leaveToBrowser = pm.input.shiftKey || doubleClick
+
+    let path = pathFromDOM(pm, event.target), node = pm.doc.path(path)
+    this.mightDrag = node.type.draggable || node == pm.sel.range.node ? path : null
+    if (this.mightDrag) {
+      event.target.draggable = true
+      if (browser.gecko && (this.setContentEditable = !event.target.hasAttribute("contentEditable")))
+        event.target.setAttribute("contentEditable", "false")
     }
-  }
-  let move = e => {
-    if (!leaveToBrowser && (Math.abs(x - e.clientX) > 4 || Math.abs(y - e.clientY) > 4))
-      leaveToBrowser = true
+
+    this.x = event.clientX; this.y = event.clientY
+
+    addEventListener("mouseup", this.up = this.up.bind(this))
+    addEventListener("mousemove", this.move = this.move.bind(this))
     pm.sel.pollForUpdate()
   }
-  addEventListener("mouseup", up)
-  addEventListener("mousemove", move)
+
+  done() {
+    removeEventListener("mouseup", this.up)
+    removeEventListener("mousemove", this.move)
+    if (this.mightDrag) {
+      this.event.target.draggable = false
+      if (browser.gecko && this.setContentEditable)
+        this.event.target.removeAttribute("contentEditable")
+    }
+  }
+
+  up() {
+    this.done()
+
+    if (this.leaveToBrowser) {
+      this.pm.sel.pollForUpdate()
+    } else if (this.event.ctrlKey) {
+      selectClickedNode(this.pm, this.event)
+    } else if (!handleNodeClick(this.pm, "handleClick", this.event, true)) {
+      let pos = selectableNodeAbove(this.pm, this.event.target, {left: this.x, top: this.y})
+      if (pos) {
+        this.pm.setNodeSelection(pos)
+        this.pm.focus()
+      } else {
+        this.pm.sel.pollForUpdate()
+      }
+    }
+  }
+
+  move(event) {
+    if (!this.leaveToBrowser && (Math.abs(this.x - event.clientX) > 4 ||
+                                 Math.abs(this.y - event.clientY) > 4))
+      this.leaveToBrowser = true
+    this.pm.sel.pollForUpdate()
+  }
 }
 
 handlers.touchdown = pm => {
   pm.sel.pollForUpdate()
+}
+
+handlers.contextmenu = (pm, e) => {
+  handleNodeClick(pm, "handleContextMenu", e, false)
 }
 
 // A class to track state while creating a composed character.
@@ -296,63 +331,92 @@ handlers.input = (pm) => {
 
 let lastCopied = null
 
+function setCopied(doc, from, to, dataTransfer) {
+  let fragment = doc.sliceBetween(from, to)
+  lastCopied = {doc, from, to,
+                schema: doc.type.schema,
+                html: toHTML(fragment),
+                text: toText(fragment)}
+  if (dataTransfer) {
+    dataTransfer.clearData()
+    dataTransfer.setData("text/html", lastCopied.html)
+    dataTransfer.setData("text/plain", lastCopied.text)
+  }
+}
+
+function getCopied(pm, dataTransfer, plainText) {
+  let txt = dataTransfer.getData("text/plain")
+  let html = dataTransfer.getData("text/html")
+  if (!html && !txt) return null
+  let doc
+  if (plainText && txt) {
+    doc = fromText(pm.schema, pm.signalPipelined("transformPastedText", txt))
+  } else if (lastCopied && lastCopied.html == html && lastCopied.schema == pm.schema) {
+    return lastCopied
+  } else if (html) {
+    doc = fromHTML(pm.schema, pm.signalPipelined("transformPastedHTML", html))
+  } else {
+    doc = parseFrom(pm.schema, pm.signalPipelined("transformPastedText", txt),
+                    knownSource("markdown") ? "markdown" : "text")
+  }
+  return {doc, from: findSelectionAtStart(doc).from, to: findSelectionAtEnd(doc).to}
+}
+
 handlers.copy = handlers.cut = (pm, e) => {
   let {from, to, empty} = pm.selection
   if (empty) return
-  let fragment = pm.doc.sliceBetween(from, to)
-  lastCopied = {doc: pm.doc, from, to,
-                html: toHTML(fragment),
-                text: toText(fragment)}
-
+  setCopied(pm.doc, from, to, e.clipboardData)
   if (e.clipboardData) {
     e.preventDefault()
-    e.clipboardData.clearData()
-    e.clipboardData.setData("text/html", lastCopied.html)
-    e.clipboardData.setData("text/plain", lastCopied.text)
     if (e.type == "cut" && !empty)
       pm.tr.delete(from, to).apply()
   }
 }
 
+// :: (text: string) → string #path=ProseMirror#events#transformPastedText
+// Fired when plain text is pasted. Handlers must return the given
+// string or a [transformed](#EventMixin.signalPipelined) version of
+// it.
+
+// :: (html: string) → string #path=ProseMirror#events#transformPastedHTML
+// Fired when html content is pasted. Handlers must return the given
+// string or a [transformed](#EventMixin.signalPipelined) version of
+// it.
+
 handlers.paste = (pm, e) => {
   if (!e.clipboardData) return
   let sel = pm.selection
-  let txt = e.clipboardData.getData("text/plain")
-  let html = e.clipboardData.getData("text/html")
-  if (html || txt) {
+  let fragment = getCopied(pm, e.clipboardData, pm.input.shiftKey)
+  if (fragment) {
     e.preventDefault()
-    let doc, from, to
-    if (pm.input.shiftKey && txt) {
-      doc = fromText(pm.schema, txt)
-    } else if (lastCopied && (lastCopied.html == html || lastCopied.text == txt)) {
-      ;({doc, from, to} = lastCopied)
-    } else if (html) {
-      doc = fromHTML(pm.schema, html)
-    } else {
-      doc = parseFrom(pm.schema, txt, knownSource("markdown") ? "markdown" : "text")
-    }
-    pm.tr.replace(sel.from, sel.to, doc, from || findSelectionAtStart(doc).from,
-                  to || findSelectionAtEnd(doc).to).apply()
+    pm.tr.replace(sel.from, sel.to, fragment.doc, fragment.from, fragment.to).apply()
     pm.scrollIntoView()
   }
 }
 
 handlers.dragstart = (pm, e) => {
+  let mouseDown = pm.input.mouseDown
+  if (mouseDown) mouseDown.done()
+
   if (!e.dataTransfer) return
 
   let {from, to, empty} = pm.selection, fragment
-  if (!empty) {
-    let pos = pm.posAtCoords({left: e.clientX, top: e.clientY})
-    if (pos.cmp(from) >= 0 && pos.cmp(to) <= 0) {
-      fragment = pm.doc.sliceBetween(from, to)
-      e.dataTransfer.setData("text/html", toHTML(fragment))
-      e.dataTransfer.setData("text/plain", toText(fragment))
-      pm.input.draggingFrom = true
-    }
+  let pos = !empty && pm.posAtCoords({left: e.clientX, top: e.clientY})
+  if (pos && pos.cmp(from) >= 0 && pos.cmp(to) <= 0) {
+    fragment = {from, to}
+  } else if (mouseDown && mouseDown.mightDrag) {
+    let pos = Pos.from(mouseDown.mightDrag)
+    fragment = {from: pos, to: pos.move(1)}
+  }
+
+  if (fragment) {
+    // FIXME the document could change during a drag, invalidating this range
+    pm.input.draggingFrom = fragment
+    setCopied(pm.doc, fragment.from, fragment.to, e.dataTransfer)
   }
 }
 
-handlers.dragend = pm => window.setTimeout(() => pm.input.dragginFrom = false, 50)
+handlers.dragend = pm => window.setTimeout(() => pm.input.draggingFrom = false, 50)
 
 handlers.dragover = handlers.dragenter = (pm, e) => {
   e.preventDefault()
@@ -378,22 +442,17 @@ handlers.drop = (pm, e) => {
 
   if (!e.dataTransfer) return
 
-  let html, txt, doc
-  if (html = e.dataTransfer.getData("text/html"))
-    doc = fromHTML(pm.schema, html, {document})
-  else if (txt = e.dataTransfer.getData("text/plain"))
-    doc = parseFrom(pm.schema, txt, knownSource("markdown") ? "markdown" : "text")
-
-  if (doc) {
+  let fragment = getCopied(pm, e.dataTransfer)
+  if (fragment) {
     e.preventDefault()
     let insertPos = pm.posAtCoords({left: e.clientX, top: e.clientY}), origPos = insertPos
     if (!insertPos) return
     let tr = pm.tr
     if (pm.input.draggingFrom && !e.ctrlKey) {
-      tr.deleteSelection()
+      tr.delete(pm.input.draggingFrom.from, pm.input.draggingFrom.to)
       insertPos = tr.map(insertPos).pos
     }
-    tr.replace(insertPos, insertPos, doc, findSelectionAtStart(doc).from, findSelectionAtEnd(doc).to).apply()
+    tr.replace(insertPos, insertPos, fragment.doc, fragment.from, fragment.to).apply()
     let posAfter = tr.map(origPos).pos
     if (Pos.samePath(insertPos.path, posAfter.path) && posAfter.offset == insertPos.offset + 1 &&
         pm.doc.nodeAfter(insertPos).type.selectable)

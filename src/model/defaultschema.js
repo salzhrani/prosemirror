@@ -35,6 +35,9 @@ export class HorizontalRule extends Block {
 // `level`, which indicates the heading level, and defaults to 1.
 export class Heading extends Textblock {
   get attrs() { return {level: new Attribute({default: "1"})} }
+  // :: number
+  // Controls the maximum heading level. Has the value 6 in the
+  // `Heading` class, but you can override it in a subclass.
   get maxLevel() { return 6 }
 }
 
@@ -65,6 +68,7 @@ export class Image extends Inline {
       title: new Attribute({default: ""})
     }
   }
+  get draggable() { return true }
 }
 
 // ;; The default hard break node type.
@@ -88,7 +92,7 @@ export class StrongMark extends MarkType {
 // - **`href`** (required): The link target.
 // - **`title`**: The link's title.
 export class LinkMark extends MarkType {
-  static get rank() { return 53 }
+  static get rank() { return 25 }
   get attrs() {
     return {
       href: new Attribute,
