@@ -1,5 +1,5 @@
 import {AssertionError} from "../util/error"
-import {elt, insertCSS} from "../dom"
+import {elt/*, insertCSS*/} from "../dom"
 
 // !! The `ui/prompt` module implements functionality for prompting
 // the user for [command parameters](#CommandSpec.params).
@@ -186,6 +186,23 @@ ParamPrompt.prototype.paramTypes.select = {
   }
 }
 
+ParamPrompt.prototype.paramTypes.radio = {
+  render(param, value) {
+    let options = param.options.call ? param.options(this) : param.options
+    return elt("div",
+      {class: "ProseMirror-radio" + (param.name ? " ProseMirror-radio-" + param.name : '')},
+      options.map(o => {
+        let el = elt("label", {'data-for': o.value}, [elt("input", {class: 'ProseMirror-radio-input', type: "radio", value: o.value, name: param.name}), o.label || ''])
+        el.checked = o.value == value
+        return el;
+      }))
+  },
+  read(dom) {
+    let checked = dom.querySelector('input:checked');
+    return checked && checked.value
+  }
+}
+
 // :: (ProseMirror, DOMNode, ?Object) → {close: ()}
 // Open a dialog box for the given editor, putting `content` inside of
 // it. The `close` method on the return value can be used to
@@ -226,7 +243,7 @@ export function openPrompt(pm, content, options) {
   pm.on("interaction", close)
   return {close}
 }
-
+/*
 insertCSS(`
 .ProseMirror-prompt {
   background: white;
@@ -269,3 +286,4 @@ insertCSS(`
   min-width: 10em;
 }
 `)
+*/
