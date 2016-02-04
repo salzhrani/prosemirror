@@ -31,26 +31,22 @@ export class Command {
   // :: (ProseMirror, ?[any]) → ?bool
   // Execute this command. If the command takes
   // [parameters](#Command.params), they can be passed as second
-  // argument here, or omitted, in which case a [parameter
-  // handler](#commandParamHandler) will be called to prompt the user
-  // for values.
+  // argument here, or otherwise the user will be prompted for them
+  // using the value of the `commandParamPrompt` option.
   //
   // Returns the value returned by the command spec's [`run`
-  // method](#CommandSpec.run), or `false` if the command could not be
-  // ran.
+  // method](#CommandSpec.run), or a `ParamPrompt` instance if the
+  // command is ran asynchronously through a prompt.
   exec(pm, params) {
     let run = this.spec.run
-    if (!this.params.length) return run.call(this.self, pm)
-    if (params) return run.call(this.self, pm, ...params)
-    let fromCx = contextParamHandler
-    let handler = fromCx || pm.options.commandParamHandler || defaultParamHandler
-    if (!handler) return false
-    handler(pm, this, params => {
-      if (params) {
-        if (fromCx) withParamHandler(fromCx, run.bind(this.self, pm, ...params))
-        else run.call(this.self, pm, ...params)
-      }
-    })
+    if (!params) {
+      if (!this.params.length) return run.call(this.self, pm)
+      return new pm.options.commandParamPrompt(pm, this).open()
+    } else {
+      if (this.params.length != (params ? params.length : 0))
+        AssertionError.raise("Invalid amount of parameters for command " + this.name)
+      return run.call(this.self, pm, ...params)
+    }
   }
 
   // :: (ProseMirror) → bool
@@ -241,31 +237,10 @@ CommandSet.default = CommandSet.empty.add("schema").add(baseCommands)
 // the command's source item), tries to derive an initial value for
 // the parameter, or return null if it can't.
 
-let contextParamHandler = null
-
-// :: ((pm: ProseMirror, cmd: Command, callback: (?[any])), ())
-// Run `f`, overriding the current [command parameter handler](#commandParamHandler)
-// with `handler` for the dynamic scope of the function.
-
-export function withParamHandler(handler, f) {
-  let prev = contextParamHandler
-  contextParamHandler = handler
-  try { return f() }
-  finally { contextParamHandler = prev }
-}
-
-let defaultParamHandler = null
-
-// :: ((pm: ProseMirror, cmd: Command, callback: (?[any])), bool)
-// Register a default [parameter handler](#commandParamHandler), which
-// is a function that prompts the user to enter values for a command's
-// [parameters](#CommandParam), and calls a callback with the values
-// received. If `override` is set to false, the new handler will be
-// ignored if another handler has already been defined.
-export function defineDefaultParamHandler(handler, override = true) {
-  if (!defaultParamHandler || override)
-    defaultParamHandler = handler
-}
+// :: (any) → ?string #path=CommandParam.validate
+// An optional function that is called to validate values provided for
+// this parameter. Should return a falsy value when the value is
+// valid, and an error message when it is not.
 
 function deriveKeymap(pm) {
   let bindings = {}, platform = browser.mac ? "mac" : "pc"
@@ -448,6 +423,17 @@ function alreadyHasBlockType(doc, from, to, type, attrs) {
   return found
 }
 
+function activeTextblockIs(pm, type, attrs) {
+  let {from, to, node} = pm.selection
+  if (!node || node.isInline) {
+    if (!Pos.samePath(from.path, to.path)) return false
+    node = pm.doc.path(from.path)
+  } else if (!node.isTextblock) {
+    return false
+  }
+  return node.hasMarkup(type, attrs)
+}
+
 NodeType.deriveableCommands.make = conf => ({
   run(pm) {
     let {from, to} = pm.selection
@@ -459,6 +445,9 @@ NodeType.deriveableCommands.make = conf => ({
       return node.isTextblock && !node.hasMarkup(this, conf.attrs)
     else
       return !alreadyHasBlockType(pm.doc, from, to, this, conf.attrs)
+  },
+  active(pm) {
+    return activeTextblockIs(pm, this, conf.attrs)
   }
 })
 

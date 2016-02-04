@@ -64,6 +64,7 @@ export class ProseMirror {
     // A namespace where modules can store references to themselves
     // associated with this editor instance.
     this.mod = Object.create(null)
+    this.cached = Object.create(null)
     this.operation = null
     this.dirtyNodes = new Map // Maps node object to 1 (re-scan content) or 2 (redraw entirely)
     this.flushScheduled = false
@@ -244,8 +245,9 @@ export class ProseMirror {
   }
 
   startOperation() {
-    this.sel.beforeStartOp()
     this.operation = new Operation(this)
+    if (this.sel.beforeStartOp()) this.operation.sel = this.sel.range
+
     if (!this.flushScheduled) {
       requestAnimationFrame(() => {
         this.flushScheduled = false
@@ -437,8 +439,7 @@ export class ProseMirror {
 
   // :: (string, ?[any]) → bool
   // Execute the named [command](#Command). If the command takes
-  // parameters and they are not passed here, the user will be
-  // prompted for them.
+  // parameters, they can be passed as an array.
   execCommand(name, params) {
     let cmd = this.commands[name]
     return !!(cmd && cmd.exec(this, params) !== false)

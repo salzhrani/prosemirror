@@ -4,7 +4,7 @@ import {elt, insertCSS} from "../dom"
 import {Tooltip} from "../ui/tooltip"
 import {UpdateScheduler} from "../ui/update"
 
-import {Menu, TooltipDisplay, menuGroups} from "./menu"
+import {renderGrouped, inlineGroup, insertMenu, textblockMenu, blockGroup} from "./menu"
 
 const classPrefix = "ProseMirror-tooltipmenu"
 
@@ -31,31 +31,26 @@ const classPrefix = "ProseMirror-tooltipmenu"
 //   : When enabled, and a whole block is selected or the cursor is
 //     inside an empty block, the block menu gets shown.
 //
-// **`inlineGroups`**`: [string] = ["inline", "insert"]`
-//   : The menu groups to show when displaying the menu for inline
+// **`inlineContent`**`: [`[`MenuGroup`](#MenuGroup)`]`
+//   : The menu elements to show when displaying the menu for inline
 //     content.
 //
-// **`inlineItems`**`: [union<string, [string]>]`
-//   : Instead of using menu groups, this can be used to completely
-//     override the set of commands shown for inline content. If
-//     nested arrays are used, separators will be shown between items
-//     from different arrays.
-//
-// **`blockGroups`**`: [string] = ["insert", "block"]`
-//   : The menu groups to show when displaying the menu for block
+// **`blockContent`**`: [`[`MenuGroup`](#MenuGroup)`]`
+//   : The menu elements to show when displaying the menu for block
 //     content.
 //
-// **`blockItems`**`: [union<string, [string]>]`
-//   : Overrides the commands shown for block content.
+// **`selectedBlockContent`**`: [MenuGroup]`
+//   : The elements to show when a full block has been selected and
+//     `selectedBlockMenu` is enabled. Defaults to concatenating
+//     `inlineContent` and `blockContent`.
 
 defineOption("tooltipMenu", false, function(pm, value) {
   if (pm.mod.tooltipMenu) pm.mod.tooltipMenu.detach()
   pm.mod.tooltipMenu = value ? new TooltipMenu(pm, value) : null
 })
 
-function getItems(pm, items) {
-  return Array.isArray(items) ? items.map(getItems.bind(null, pm)) : pm.commands[items]
-}
+const defaultInline = [inlineGroup, insertMenu]
+const defaultBlock = [[textblockMenu, blockGroup]]
 
 class TooltipMenu {
   constructor(pm, config) {
@@ -67,55 +62,43 @@ class TooltipMenu {
     this.updater = new UpdateScheduler(pm, "change selectionChange blur commandsChanged", () => this.update())
     this.onContextMenu = this.onContextMenu.bind(this)
     pm.content.addEventListener("contextmenu", this.onContextMenu)
-    this.onMouseDown = () => { if (this.menu.active) this.menu.reset() }
-    pm.content.addEventListener("mousedown", this.onMouseDown)
 
     this.tooltip = new Tooltip(pm.wrapper, "above")
-    this.menu = new Menu(pm, new TooltipDisplay(this.tooltip), () => this.updater.force())
+    this.inlineContent = this.config.inlineContent || defaultInline
+    this.blockContent = this.config.blockContent || defaultBlock
+    this.selectedBlockContent = this.config.selectedBlockContent || this.inlineContent.concat(this.blockContent)
   }
 
   detach() {
     this.updater.detach()
     this.tooltip.detach()
     this.pm.content.removeEventListener("contextmenu", this.onContextMenu)
-    this.pm.content.removeEventListener("mousedown", this.onMouseDown)
   }
 
-  items(inline, block) {
-    let result
-    if (!inline) result = []
-    else if (this.config.inlineItems) result = getItems(this.pm, this.config.inlineItems)
-    else result = menuGroups(this.pm, this.config.inlineGroups || ["inline", "insert"])
-
-    if (block) {
-      if (this.config.blockItems) addIfNew(result, getItems(this.pm, this.config.blockItems))
-      else addIfNew(result, menuGroups(this.pm, this.config.blockGroups || ["insert", "block"]))
-    }
-    return result
+  show(content, coords) {
+    this.tooltip.open(elt("div", null, renderGrouped(this.pm, content)), coords)
   }
 
   update() {
-    if (this.menu.active) return null
-
     let {empty, node, from, to} = this.pm.selection, link
     if (!this.pm.hasFocus()) {
       this.tooltip.close()
     } else if (node && node.isBlock) {
       return () => {
         let coords = topOfNodeSelection(this.pm)
-        return () => this.menu.show(this.items(false, true), coords)
+        return () => this.show(this.blockContent, coords)
       }
     } else if (!empty) {
       return () => {
         let coords = node ? topOfNodeSelection(this.pm) : topCenterOfSelection()
         let showBlock = this.selectedBlockMenu && Pos.samePath(from.path, to.path) &&
             from.offset == 0 && to.offset == this.pm.doc.path(from.path).size
-        return () => this.menu.show(this.items(true, showBlock), coords)
+        return () => this.show(showBlock ? this.selectedBlockContent : this.inlineContent, coords)
       }
     } else if (this.selectedBlockMenu && this.pm.doc.path(from.path).size == 0) {
       return () => {
         let coords = this.pm.coordsAtPos(from)
-        return () => this.menu.show(this.items(false, true), coords)
+        return () => this.show(this.blockContent, coords)
       }
     } else if (this.showLinks && (link = this.linkUnderCursor())) {
       return () => {
@@ -135,7 +118,8 @@ class TooltipMenu {
   }
 
   showLink(link, pos) {
-    let node = elt("div", {class: classPrefix + "-linktext"}, elt("a", {href: link.attrs.href, title: link.attrs.title}, link.attrs.href))
+    let node = elt("div", {class: classPrefix + "-linktext"},
+                   elt("a", {href: link.attrs.href, title: link.attrs.title}, link.attrs.href))
     this.tooltip.open(node, pos)
   }
 
@@ -146,7 +130,7 @@ class TooltipMenu {
 
     this.pm.setTextSelection(pos, pos)
     this.pm.flush()
-    this.menu.show(this.items(true, false), topCenterOfSelection())
+    this.show(this.inlineContent, topCenterOfSelection())
   }
 }
 
@@ -177,15 +161,10 @@ function topOfNodeSelection(pm) {
   return {left: Math.min((box.left + box.right) / 2, box.left + 20), top: box.top}
 }
 
-function addIfNew(array, elts) {
-  for (let i = 0; i < elts.length; i++)
-    if (array.indexOf(elts[i]) == -1) array.push(elts[i])
-}
-
 insertCSS(`
 
 .${classPrefix}-linktext a {
-  color: white;
+  color: #444;
   text-decoration: none;
   padding: 0 5px;
 }
