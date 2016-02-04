@@ -43,7 +43,7 @@ export class Tooltip {
       class: prefix,
       style: "display: block; position: absolute"
     }, node))
-    let size = {width: wrap.offsetWidth, height: wrap.offsetHeight}
+    let size = {width: wrap.offsetWidth + 1, height: wrap.offsetHeight}
     wrap.parentNode.removeChild(wrap)
     return size
   }
@@ -126,79 +126,112 @@ export class Tooltip {
     }
   }
 }
+/*
+insertCSS(`
 
-// insertCSS(`
+.${prefix} {
+  position: absolute;
+  display: none;
+  box-sizing: border-box;
+  -moz-box-sizing: border- box;
+  overflow: hidden;
 
-// .${prefix} {
-//   position: absolute;
-//   display: none;
-//   box-sizing: border-box;
-//   -moz-box-sizing: border- box;
-//   overflow: hidden;
+  -webkit-transition: width 0.4s ease-out, height 0.4s ease-out, left 0.4s ease-out, top 0.4s ease-out, opacity 0.2s;
+  -moz-transition: width 0.4s ease-out, height 0.4s ease-out, left 0.4s ease-out, top 0.4s ease-out, opacity 0.2s;
+  transition: width 0.4s ease-out, height 0.4s ease-out, left 0.4s ease-out, top 0.4s ease-out, opacity 0.2s;
+  opacity: 0;
 
-//   -webkit-transition: width 0.4s ease-out, height 0.4s ease-out, left 0.4s ease-out, top 0.4s ease-out, opacity 0.2s;
-//   -moz-transition: width 0.4s ease-out, height 0.4s ease-out, left 0.4s ease-out, top 0.4s ease-out, opacity 0.2s;
-//   transition: width 0.4s ease-out, height 0.4s ease-out, left 0.4s ease-out, top 0.4s ease-out, opacity 0.2s;
-//   opacity: 0;
+  border-radius: 5px;
+  padding: 3px 7px;
+  margin: 0;
+  background: white;
+  border: 1px solid #777;
+  color: #555;
 
-//   border-radius: 5px;
-//   padding: 3px 7px;
-//   margin: 0;
-//   background: #444;
-//   border-color: #777;
-//   color: white;
+  z-index: 11;
+}
 
-//   z-index: 11;
-// }
+.${prefix}-pointer {
+  position: absolute;
+  display: none;
+  width: 0; height: 0;
 
-// .${prefix}-pointer {
-//   content: "";
-//   position: absolute;
-//   display: none;
-//   width: 0; height: 0;
+  -webkit-transition: left 0.4s ease-out, top 0.4s ease-out, opacity 0.2s;
+  -moz-transition: left 0.4s ease-out, top 0.4s ease-out, opacity 0.2s;
+  transition: left 0.4s ease-out, top 0.4s ease-out, opacity 0.2s;
+  opacity: 0;
 
-//   -webkit-transition: left 0.4s ease-out, top 0.4s ease-out, opacity 0.2s;
-//   -moz-transition: left 0.4s ease-out, top 0.4s ease-out, opacity 0.2s;
-//   transition: left 0.4s ease-out, top 0.4s ease-out, opacity 0.2s;
-//   opacity: 0;
+  z-index: 12;
+}
 
-//   z-index: 12;
-// }
+.${prefix}-pointer:after {
+  content: "";
+  position: absolute;
+  display: block;
+}
 
-// .${prefix}-pointer-above {
-//   border-left: 6px solid transparent;
-//   border-right: 6px solid transparent;
-//   border-top: 6px solid #444;
-// }
+.${prefix}-pointer-above {
+  border-left: 6px solid transparent;
+  border-right: 6px solid transparent;
+  border-top: 6px solid #777;
+}
 
-// .${prefix}-pointer-below {
-//   border-left: 6px solid transparent;
-//   border-right: 6px solid transparent;
-//   border-bottom: 6px solid #444;
-// }
+.${prefix}-pointer-above:after {
+  border-left: 6px solid transparent;
+  border-right: 6px solid transparent;
+  border-top: 6px solid white;
+  left: -6px; top: -7px;
+}
 
-// .${prefix}-pointer-right {
-//   border-top: 6px solid transparent;
-//   border-bottom: 6px solid transparent;
-//   border-right: 6px solid #444;
-// }
+.${prefix}-pointer-below {
+  border-left: 6px solid transparent;
+  border-right: 6px solid transparent;
+  border-bottom: 6px solid #777;
+}
 
-// .${prefix}-pointer-left {
-//   border-top: 6px solid transparent;
-//   border-bottom: 6px solid transparent;
-//   border-left: 6px solid #444;
-// }
+.${prefix}-pointer-below:after {
+  border-left: 6px solid transparent;
+  border-right: 6px solid transparent;
+  border-bottom: 6px solid white;
+  left: -6px; top: 1px;
+}
 
-// .${prefix} input[type="text"],
-// .${prefix} textarea {
-//   background: #666;
-//   color: white;
-//   border: none;
-//   outline: none;
-// }
+.${prefix}-pointer-right {
+  border-top: 6px solid transparent;
+  border-bottom: 6px solid transparent;
+  border-right: 6px solid #777;
+}
 
-// .${prefix} input[type="text"] {
-//   padding: 0 4px;
-// }
+.${prefix}-pointer-right:after {
+  border-top: 6px solid transparent;
+  border-bottom: 6px solid transparent;
+  border-right: 6px solid white;
+  left: 1px; top: -6px;
+}
 
-// `)
+.${prefix}-pointer-left {
+  border-top: 6px solid transparent;
+  border-bottom: 6px solid transparent;
+  border-left: 6px solid #777;
+}
+
+.${prefix}-pointer-left:after {
+  border-top: 6px solid transparent;
+  border-bottom: 6px solid transparent;
+  border-left: 6px solid white;
+  left: -7px; top: -6px;
+}
+
+.${prefix} input[type="text"],
+.${prefix} textarea {
+  background: #eee;
+  border: none;
+  outline: none;
+}
+
+.${prefix} input[type="text"] {
+  padding: 0 4px;
+}
+
+`)
+*/

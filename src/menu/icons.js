@@ -49,15 +49,11 @@ function buildSVG(name, data) {
 //   cursor: pointer;
 // }
 
-// .${prefix}-active {
-//   background: #666;
-//   border-radius: 4px;
-// }
-
 // .${prefix} svg {
 //   fill: currentColor;
 //   height: 1em;
 // }
+
 
 // .${prefix} span {
 //   vertical-align: text-top;
