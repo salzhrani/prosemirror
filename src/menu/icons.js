@@ -18,7 +18,7 @@ export function getIcon(name, data) {
     let use = svg.appendChild(document.createElementNS(SVG, "use"))
     use.setAttributeNS(XLINK, "href", "#pm-icon-" + name)
   } else {
-    node.appendChild(document.createElement("span")).textContent = data.text
+    node.appendChild(document.createElement("span")).textContent = data.text || ''
     node.setAttribute('data-name', name);
     if (data.css) node.firstChild.style.cssText = data.css
   }

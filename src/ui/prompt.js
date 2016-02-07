@@ -69,6 +69,13 @@ export class ParamPrompt {
       submit()
     })
 
+    this.form.addEventListener("change", e => {
+      if (e.target.type === 'radio') {
+        e.preventDefault()
+        submit()
+      }
+    })
+
     this.form.addEventListener("keydown", e => {
       if (e.keyCode == 27)
         prompt.close()
