@@ -8,18 +8,18 @@ import {posFromDOM, pathToDOM, DOMFromPos, coordsAtPos} from "./dompos"
 export class SelectionError extends ProseMirrorError {}
 
 export class SelectionState {
-  constructor(pm) {
+  constructor(pm, range) {
     this.pm = pm
+    this.range = range
 
-    this.range = findSelectionAtStart(pm.doc)
     this.lastNonNodePos = null
 
-    this.pollState = null
-    this.pollTimeout = null
+    this.polling = null
     this.lastAnchorNode = this.lastHeadNode = this.lastAnchorOffset = this.lastHeadOffset = null
     this.lastNode = null
 
     pm.content.addEventListener("focus", () => this.receivedFocus())
+    this.poller = this.poller.bind(this)
   }
 
   setAndSignal(range, clearLast) {
@@ -35,29 +35,27 @@ export class SelectionState {
     if (clearLast !== false) this.lastAnchorNode = null
   }
 
-  pollForUpdate() {
-    if (this.pm.input.composing) return
-    clearTimeout(this.pollTimeout)
-    this.pollState = "update"
-    let n = 0, check = () => {
-      if (this.pm.input.composing) {
-        // Abort
-      } else if (this.pm.operation) {
-        this.pollTimeout = setTimeout(check, 20)
-      } else if (!this.readUpdate() && ++n == 1) {
-        this.pollTimeout = setTimeout(check, 50)
-      } else {
-        this.stopPollingForUpdate()
-      }
+  poller() {
+    if (hasFocus(this.pm)) {
+      if (!this.pm.operation) this.readFromDOM()
+      this.polling = setTimeout(this.poller, 100)
+    } else {
+      this.polling = null
     }
-    this.pollTimeout = setTimeout(check, 20)
   }
 
-  stopPollingForUpdate() {
-    if (this.pollState == "update") {
-      this.pollState = null
-      this.pollToSync()
-    }
+  startPolling() {
+    clearTimeout(this.polling)
+    this.polling = setTimeout(this.poller, 50)
+  }
+
+  fastPoll() {
+    this.startPolling()
+  }
+
+  stopPolling() {
+    clearTimeout(this.polling)
+    this.polling = null
   }
 
   domChanged() {
@@ -72,17 +70,19 @@ export class SelectionState {
     this.lastHeadNode = sel.focusNode; this.lastHeadOffset = sel.focusOffset
   }
 
-  readUpdate() {
+  readFromDOM() {
     if (this.pm.input.composing || !hasFocus(this.pm) || !this.domChanged()) return false
 
     let sel = window.getSelection(), doc = this.pm.doc
     let anchor = posFromDOM(this.pm, sel.anchorNode, sel.anchorOffset)
-    let head = posFromDOM(this.pm, sel.focusNode, sel.focusOffset)
-    let newSel = findSelectionNear(doc, head, this.range.head && this.range.head.cmp(head) < 0 ? -1 : 1)
-    if (newSel instanceof TextSelection && doc.path(anchor.path).isTextblock)
-      newSel = new TextSelection(anchor, newSel.head)
-    this.setAndSignal(newSel)
-    if (newSel instanceof NodeSelection || newSel.head.cmp(head) || newSel.anchor.cmp(anchor)) {
+    let head = sel.isCollapsed ? anchor : posFromDOM(this.pm, sel.focusNode, sel.focusOffset)
+
+    let newRange = findSelectionNear(doc, head, this.range.head && this.range.head.cmp(head) < 0 ? -1 : 1)
+    if (newRange instanceof TextSelection && doc.path(anchor.path).isTextblock)
+      newRange = new TextSelection(anchor, newRange.head)
+    this.setAndSignal(newRange)
+
+    if (newRange instanceof NodeSelection || newRange.head.cmp(head) || newRange.anchor.cmp(anchor)) {
       this.toDOM()
     } else {
       this.clearNode()
@@ -91,65 +91,40 @@ export class SelectionState {
     return true
   }
 
-  pollToSync() {
-    if (this.pollState) return
-    this.pollState = "sync"
-    let sync = () => {
-      if (document.activeElement != this.pm.content) {
-        this.pollState = null
-      } else {
-        if (!this.pm.operation && !this.pm.input.composing) this.syncDOM()
-        this.pollTimeout = setTimeout(sync, 200)
-      }
-    }
-    this.pollTimeout = setTimeout(sync, 200)
-  }
-
-  syncDOM() {
-    if (!this.pm.input.composing && hasFocus(this.pm) && this.domChanged())
-      this.toDOM()
-  }
-
   toDOM(takeFocus) {
-    if (this.range instanceof NodeSelection)
-      this.nodeToDOM(takeFocus)
-    else
-      this.rangeToDOM(takeFocus)
-  }
-
-  nodeToDOM(takeFocus) {
-    window.getSelection().removeAllRanges()
-    if (takeFocus) this.pm.content.focus()
-    let pos = this.range.from, node = this.range.node
-    let dom = pathToDOM(this.pm.content, pos.toPath())
-    if (dom == this.lastNode) return
-    this.clearNode()
-    addNodeSelection(node, dom)
-    this.lastNode = dom
-  }
-
-  clearNode() {
-    if (this.lastNode) {
-      clearNodeSelection(this.lastNode)
-      this.lastNode = null
-      return true
-    }
-  }
-
-  rangeToDOM(takeFocus) {
-    let sel = window.getSelection()
-    if (!this.clearNode() && !hasFocus(this.pm)) {
+    if (!hasFocus(this.pm)) {
       if (!takeFocus) return
       // See https://bugzilla.mozilla.org/show_bug.cgi?id=921444
       else if (browser.gecko) this.pm.content.focus()
     }
-    if (!this.domChanged()) return
+    if (this.range instanceof NodeSelection)
+      this.nodeToDOM()
+    else
+      this.rangeToDOM()
+  }
 
-    let range = document.createRange()
-    let content = this.pm.content
-    let anchor = DOMFromPos(content, this.range.anchor)
-    let head = DOMFromPos(content, this.range.head)
+  nodeToDOM() {
+    let dom = pathToDOM(this.pm.content, this.range.from.toPath())
+    if (dom != this.lastNode) {
+      this.clearNode()
+      dom.classList.add("ProseMirror-selectednode")
+      this.pm.content.classList.add("ProseMirror-nodeselection")
+      this.lastNode = dom
+    }
+    let range = document.createRange(), sel = window.getSelection()
+    range.selectNode(dom)
+    sel.removeAllRanges()
+    sel.addRange(range)
+    this.storeDOMState()
+  }
 
+  rangeToDOM() {
+    this.clearNode()
+
+    let anchor = DOMFromPos(this.pm.content, this.range.anchor)
+    let head = DOMFromPos(this.pm.content, this.range.head)
+
+    let sel = window.getSelection(), range = document.createRange()
     if (sel.extend) {
       range.setEnd(anchor.node, anchor.offset)
       range.collapse(false)
@@ -165,27 +140,18 @@ export class SelectionState {
     this.storeDOMState()
   }
 
-  receivedFocus() {
-    if (!this.pollState) this.pollToSync()
-  }
-
-  beforeStartOp() {
-    if (this.pollState == "update" && this.readUpdate()) {
-      clearTimeout(this.pollTimeout)
-      this.stopPollingForUpdate()
+  clearNode() {
+    if (this.lastNode) {
+      this.lastNode.classList.remove("ProseMirror-selectednode")
+      this.pm.content.classList.remove("ProseMirror-nodeselection")
+      this.lastNode = null
       return true
-    } else {
-      this.syncDOM()
     }
   }
-}
 
-function clearNodeSelection(dom) {
-  dom.classList.remove("ProseMirror-selectednode")
-}
-
-function addNodeSelection(_node, dom) {
-  dom.classList.add("ProseMirror-selectednode")
+  receivedFocus() {
+    if (this.polling == null) this.startPolling()
+  }
 }
 
 // ;; An editor selection. Can be one of two selection types:

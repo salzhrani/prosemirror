@@ -43,29 +43,15 @@ export const browser = {
 }
 
 
-function classTest(cls) { return new RegExp("(^|\\s)" + cls + "(?:$|\\s)\\s*"); }
-
-export function rmClass(node, cls) {
-  let current = node.className
-  let match = classTest(cls).exec(current)
-  if (match) {
-    let after = current.slice(match.index + match[0].length)
-    node.className = current.slice(0, match.index) + (after ? match[1] + after : "")
-  }
-}
-
-export function addClass(node, cls) {
-  let current = node.className
-  if (!classTest(cls).test(current)) node.className += (current ? " " : "") + cls
-}
-
-
+// : (DOMNode, DOMNode) → bool
+// Check whether a DOM node is an ancestor of another DOM node.
 export function contains(parent, child) {
   // Android browser and IE will return false if child is a text node.
   if (child.nodeType != 1)
     child = child.parentNode
   return child && parent.contains(child)
 }
+
 
 let accumulatedCSS = "", cssNode = null
 

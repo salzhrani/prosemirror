@@ -69,7 +69,7 @@ export class ProseMirror {
     this.dirtyNodes = new Map // Maps node object to 1 (re-scan content) or 2 (redraw entirely)
     this.flushScheduled = false
 
-    this.sel = new SelectionState(this)
+    this.sel = new SelectionState(this, findSelectionAtStart(this.doc))
     this.accurateSelection = false
     this.input = new Input(this)
 
@@ -163,6 +163,7 @@ export class ProseMirror {
     // :: Node The current document.
     this.doc = doc
     this.ranges = new RangeStore(this)
+    // :: History The edit history for the editor.
     this.history = new History(this)
   }
 
@@ -244,9 +245,10 @@ export class ProseMirror {
     return this.operation || this.startOperation()
   }
 
-  startOperation() {
+  startOperation(options) {
     this.operation = new Operation(this)
-    if (this.sel.beforeStartOp()) this.operation.sel = this.sel.range
+    if (!(options && options.readSelection === false) && this.sel.readFromDOM())
+      this.operation.sel = this.sel.range
 
     if (!this.flushScheduled) {
       requestAnimationFrame(() => {
@@ -494,6 +496,10 @@ export class ProseMirror {
         break
       }
     }
+  }
+
+  markAllDirty() {
+    this.dirtyNodes.set(this.doc, DIRTY_REDRAW)
   }
 }
 
