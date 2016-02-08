@@ -414,6 +414,7 @@ insertCSS(`
 
 .${prefix}-dropdown, .${prefix}-dropdown-menu {
   font-size: 90%;
+  white-space: nowrap;
 }
 
 .${prefix}-dropdown {
