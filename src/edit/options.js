@@ -17,9 +17,9 @@ const options = Object.create(null)
 // :: (string, any, (pm: ProseMirror, newValue: any, oldValue: any, init: bool), bool)
 // Define a new option. The `update` handler will be called with the
 // option's old and new value every time the option is
-// [changed](#ProseMirror.setOption). When `updateOnInit` is true, it
-// is also called on editor init, with null as the old value, and a fourth
-// argument of true.
+// [changed](#ProseMirror.setOption). When `updateOnInit` is false, it
+// will not be called on editor init, otherwise it is called with null as the old value,
+// and a fourth argument of true.
 export function defineOption(name, defaultValue, update, updateOnInit) {
   options[name] = new Option(defaultValue, update, updateOnInit)
 }
@@ -98,8 +98,8 @@ export function initOptions(pm) {
 
 export function setOption(pm, name, value) {
   let desc = options[name]
-  if (desc === undefined) AssertionError.raise("Option '" + name + "' is not defined")
-  if (desc.update === false) AssertionError.raise("Option '" + name + "' can not be changed")
+  if (desc === undefined) throw new AssertionError("Option '" + name + "' is not defined")
+  if (desc.update === false) throw new AssertionError("Option '" + name + "' can not be changed")
   let old = pm.options[name]
   pm.options[name] = value
   if (desc.update) desc.update(pm, value, old, false)

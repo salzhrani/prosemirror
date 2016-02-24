@@ -53,7 +53,7 @@ class SchemaItem {
         else if (attr.compute)
           value = attr.compute(this, arg)
         else
-          SchemaError.raise("No value supplied for attribute " + name)
+          throw new SchemaError("No value supplied for attribute " + name)
       }
       built[name] = value
     }
@@ -122,12 +122,11 @@ class SchemaItem {
 // serializing it to various formats, information to guide
 // deserialization, and so on).
 export class NodeType extends SchemaItem {
-  constructor(name, kind, schema) {
+  constructor(name, schema) {
     super()
     // :: string
     // The name the node type has in this schema.
     this.name = name
-    this.kind = kind
     // Freeze the attributes, to avoid calling a potentially expensive
     // getter all the time.
     this.freezeAttrs()
@@ -172,21 +171,16 @@ export class NodeType extends SchemaItem {
   // Controls whether this node type is locked.
   get locked() { return false }
 
-  // :: ?string
+  // :: ?NodeKind
   // The kind of nodes this node may contain. `null` means it's a
   // leaf node.
   get contains() { return null }
 
-  // :: string
-  // Controls the _kind_ of the node, which is used to determine valid
-  // parent/child [relations](#NodeType.contains). Should be a single
-  // name or space-separated string of kind names, where later names
-  // are considered to be sub-kinds of former ones (for example
-  // `"textblock paragraph"`). When you want to extend the superclass'
-  // set of kinds, you can do something like
-  //
-  //     static get kinds() { return super.kind + " mykind" }
-  static get kinds() { return "node" }
+  // :: ?NodeKind Sets the _kind_ of the node, which is used to
+  // determine valid parent/child [relations](#NodeType.contains).
+  // Should only be `null` for nodes that can't be child nodes (i.e.
+  // the document top node).
+  get kind() { return null }
 
   // :: (Fragment) → bool
   // Test whether the content of the given fragment could be contained
@@ -221,7 +215,7 @@ export class NodeType extends SchemaItem {
   // Test whether this node type can contain nodes of the given node
   // type.
   canContainType(type) {
-    return this.schema.subKind(type.kind, this.contains)
+    return type.kind && type.kind.isSubKind(this.contains)
   }
 
   // :: (NodeType) → bool
@@ -229,7 +223,7 @@ export class NodeType extends SchemaItem {
   // type are a sub-type of the nodes that can be contained in this
   // type.
   canContainContent(type) {
-    return this.schema.subKind(type.contains, this.contains)
+    return type.contains && type.contains.isSubKind(this.contains)
   }
 
   // :: (NodeType) → ?[NodeType]
@@ -245,11 +239,12 @@ export class NodeType extends SchemaItem {
       let current = active.shift()
       for (let name in this.schema.nodes) {
         let type = this.schema.nodes[name]
-        if (type.defaultAttrs && !(type.contains in seen) && current.from.canContainType(type)) {
+        if (type.contains && type.defaultAttrs && !(type.contains.id in seen) &&
+            current.from.canContainType(type)) {
           let via = current.via.concat(type)
           if (type.canContainType(other)) return via
           active.push({from: type, via: via})
-          seen[type.contains] = true
+          seen[type.contains.id] = true
         }
       }
     }
@@ -283,20 +278,11 @@ export class NodeType extends SchemaItem {
 
   static compile(types, schema) {
     let result = Object.create(null)
-    for (let name in types) {
-      let type = types[name]
-      let kinds = type.kinds.split(" ")
-      for (let i = 0; i < kinds.length; i++)
-        schema.registerKind(kinds[i], i ? kinds[i - 1] : null)
-      result[name] = new type(name, kinds[kinds.length - 1], schema)
-    }
-    for (let name in result) {
-      let contains = result[name].contains
-      if (contains && !(contains in schema.kinds))
-        SchemaError.raise("Node type " + name + " is specified to contain non-existing kind " + contains)
-    }
-    if (!result.doc) SchemaError.raise("Every schema needs a 'doc' type")
-    if (!result.text) SchemaError.raise("Every schema needs a 'text' type")
+    for (let name in types)
+      result[name] = new types[name](name, schema)
+
+    if (!result.doc) throw new SchemaError("Every schema needs a 'doc' type")
+    if (!result.text) throw new SchemaError("Every schema needs a 'text' type")
 
     return result
   }
@@ -308,10 +294,44 @@ export class NodeType extends SchemaItem {
   get containsMarks() { return false }
 }
 
+// ;; Class used to represent node [kind](#NodeType.kind).
+export class NodeKind {
+  // :: (string, [NodeKind])
+  // Create a new node kind with the given set of superkinds (the new
+  // kind counts as a member of each of the superkinds). The `name`
+  // field is only for debugging purposes—kind equivalens is defined
+  // by identity.
+  constructor(name, ...supers) {
+    this.name = name
+    this.supers = Object.create(null)
+    this.id = ++NodeKind.nextID
+    this.supers[this.id] = true
+    supers.forEach(sup => { for (let id in sup.supers) this.supers[id] = true })
+  }
+
+  // :: (NodeKind) → bool
+  // Test whether `other` is a subkind of this kind (or the same
+  // kind).
+  isSubKind(other) {
+    return other && (other.id in this.supers) || false
+  }
+}
+NodeKind.nextID = 0
+
+// :: NodeKind The node kind used for generic block nodes.
+NodeKind.block = new NodeKind("block")
+
+// :: NodeKind The node kind used for generic inline nodes.
+NodeKind.inline = new NodeKind("inline")
+
+// :: NodeKind The node kind used for text nodes. Subkind of
+// `NodeKind.inline`.
+NodeKind.text = new NodeKind("text", NodeKind.inline)
+
 // ;; Base type for block nodetypes.
 export class Block extends NodeType {
-  get contains() { return "block" }
-  static get kinds() { return "block" }
+  get contains() { return NodeKind.block }
+  get kind() { return NodeKind.block }
   get isBlock() { return true }
 
   get canBeEmpty() { return this.contains == null }
@@ -319,7 +339,7 @@ export class Block extends NodeType {
   defaultContent() {
     let inner = this.schema.defaultTextblockType().create()
     let conn = this.findConnection(inner.type)
-    if (!conn) SchemaError.raise("Can't create default content for " + this.name)
+    if (!conn) throw new SchemaError("Can't create default content for " + this.name)
     for (let i = conn.length - 1; i >= 0; i--) inner = conn[i].create(null, inner)
     return Fragment.from(inner)
   }
@@ -327,7 +347,7 @@ export class Block extends NodeType {
 
 // ;; Base type for textblock node types.
 export class Textblock extends Block {
-  get contains() { return "inline" }
+  get contains() { return NodeKind.inline }
   get containsMarks() { return true }
   get isTextblock() { return true }
   get canBeEmpty() { return true }
@@ -335,7 +355,7 @@ export class Textblock extends Block {
 
 // ;; Base type for inline node types.
 export class Inline extends NodeType {
-  static get kinds() { return "inline" }
+  get kind() { return NodeKind.inline }
   get isInline() { return true }
 }
 
@@ -343,7 +363,7 @@ export class Inline extends NodeType {
 export class Text extends Inline {
   get selectable() { return false }
   get isText() { return true }
-  static get kinds() { return super.kinds + " text" }
+  get kind() { return NodeKind.text }
 
   create(attrs, content, marks) {
     return new TextNode(this, this.computeAttrs(attrs, content), content, marks)
@@ -409,7 +429,7 @@ export class MarkType extends SchemaItem {
   // guarantee what it will be.)
   static get rank() { return 50 }
 
-  // :: (Object) → Mark
+  // :: (?Object) → Mark
   // Create a mark of this type. `attrs` may be `null` or an object
   // containing only some of the mark's attributes. The others, if
   // they have defaults, will be added.
@@ -457,9 +477,7 @@ export class MarkType extends SchemaItem {
 // a set of node types, their names, attributes, and nesting behavior.
 
 // ;; A schema specification is a blueprint for an actual
-// `Schema`. It maps names to node and mark types, along
-// with extra information, such as additional attributes and changes
-// to node kinds and relations.
+// `Schema`. It maps names to node and mark types.
 //
 // A specification consists of an object that associates node names
 // with node type constructors and another similar object associating
@@ -511,7 +529,6 @@ export class Schema {
     // :: SchemaSpec
     // The specification on which the schema is based.
     this.spec = spec
-    this.kinds = Object.create(null)
 
     // :: Object<NodeType>
     // An object mapping the schema's node names to node type objects.
@@ -520,7 +537,7 @@ export class Schema {
     // A map from mark names to mark type objects.
     this.marks = MarkType.compile(spec.marks, this)
     for (let prop in this.nodes)
-      if (prop in this.marks) SchemaError.raise(prop + " can not be both a node and a mark")
+      if (prop in this.marks) throw new SchemaError(prop + " can not be both a node and a mark")
 
     // :: Object
     // An object for storing whatever values modules may want to
@@ -550,9 +567,9 @@ export class Schema {
     if (typeof type == "string")
       type = this.nodeType(type)
     else if (!(type instanceof NodeType))
-      SchemaError.raise("Invalid node type: " + type)
+      throw new SchemaError("Invalid node type: " + type)
     else if (type.schema != this)
-      SchemaError.raise("Node type from different schema used (" + type.name + ")")
+      throw new SchemaError("Node type from different schema used (" + type.name + ")")
 
     return type.create(attrs, content, marks)
   }
@@ -580,7 +597,8 @@ export class Schema {
   // :: (string, ?Object) → Mark
   // Create a mark with the named type
   mark(name, attrs) {
-    let spec = this.marks[name] || SchemaError.raise("No mark named " + name)
+    let spec = this.marks[name]
+    if (!spec) throw new SchemaError("No mark named " + name)
     return spec.create(attrs)
   }
 
@@ -608,27 +626,9 @@ export class Schema {
   // Get the `NodeType` associated with the given name in
   // this schema, or raise an error if it does not exist.
   nodeType(name) {
-    return this.nodes[name] || SchemaError.raise("Unknown node type: " + name)
-  }
-
-  registerKind(kind, sup) {
-    if (kind in this.kinds) {
-      if (this.kinds[kind] == sup) return
-      SchemaError.raise(`Inconsistent superkinds for kind ${kind}: ${sup} and ${this.kinds[kind]}`)
-    }
-    if (this.subKind(kind, sup))
-      SchemaError.raise(`Conflicting kind hierarchy through ${kind} and ${sup}`)
-    this.kinds[kind] = sup
-  }
-
-  // :: (string, string) → bool
-  // Test whether a node kind is a sub-kind of another kind.
-  subKind(sub, sup) {
-    for (;;) {
-      if (sub == sup) return true
-      sub = this.kinds[sub]
-      if (!sub) return false
-    }
+    let found = this.nodes[name]
+    if (!found) throw new SchemaError("Unknown node type: " + name)
+    return found
   }
 
   // :: (string, (name: string, value: *, source: union<NodeType, MarkType>, name: string))

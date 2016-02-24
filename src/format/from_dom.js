@@ -16,7 +16,7 @@ export function fromDOM(schema, dom, options) {
   let end = options.to != null && dom.childNodes[options.to] || null
   context.addAll(start, end, true)
   let doc
-  while (context.stack.length) doc = context.leave()
+  do { doc = context.leave() } while (context.stack.length)
   return doc
 }
 
@@ -102,14 +102,16 @@ class DOMParseState {
       let value = dom.nodeValue
       let top = this.top, last
       if (/\S/.test(value) || top.type.isTextblock) {
-        value = value.replace(/\s+/g, " ")
-        // If this starts with whitespace, and there is either no node
-        // before it or a node that ends with whitespace, strip the
-        // leading space.
-        if (/^\s/.test(value) &&
-            (!(last = top.content[top.content.length - 1]) ||
-             (last.type.name == "text" && /\s$/.test(last.text))))
-          value = value.slice(1)
+        if (!this.options.preserveWhitespace) {
+          value = value.replace(/\s+/g, " ")
+          // If this starts with whitespace, and there is either no node
+          // before it or a node that ends with whitespace, strip the
+          // leading space.
+          if (/^\s/.test(value) &&
+              (!(last = top.content[top.content.length - 1]) ||
+               (last.type.name == "text" && /\s$/.test(last.text))))
+            value = value.slice(1)
+        }
         if (value)
           this.insertNode(this.schema.text(value, this.marks))
       }
@@ -181,6 +183,7 @@ class DOMParseState {
     if (this.top.type.canContain(node)) {
       this.doClose()
     } else {
+      let found
       for (let i = this.stack.length - 1; i >= 0; i--) {
         let route = this.stack[i].type.findConnection(node.type)
         if (!route) continue
@@ -189,17 +192,19 @@ class DOMParseState {
         } else {
           while (this.stack.length > i + 1) this.leave()
         }
-        for (let j = 0; j < route.length; j++)
-          this.enter(route[j])
-        if (this.marks.length) this.marks = noMarks
+        found = route
         break
       }
+      if (!found) return
+      for (let j = 0; j < found.length; j++)
+        this.enter(found[j])
+      if (this.marks.length) this.marks = noMarks
     }
     this.top.content.push(node)
     return node
   }
 
-  // :: (DOMNode, NodeType, ?Object, [Node]) → Node
+  // :: (DOMNode, NodeType, ?Object, [Node]) → ?Node
   // Insert a node of the given type, with the given content, based on
   // `dom`, at the current position in the document.
   insert(type, attrs, content) {
@@ -214,8 +219,10 @@ class DOMParseState {
     if (this.marks.length) this.marks = noMarks
     let top = this.stack.pop()
     let last = top.content[top.content.length - 1]
-    if (last && last.isText && /\s$/.test(last.text))
-      top.content[top.content.length - 1] = last.copy(last.text.slice(0, last.text.length - 1))
+    if (!this.options.preserveWhitespace && last && last.isText && /\s$/.test(last.text)) {
+      if (last.text.length == 1) top.content.pop()
+      else top.content[top.content.length - 1] = last.copy(last.text.slice(0, last.text.length - 1))
+    }
     let node = top.type.createAutoFill(top.attrs, top.content)
     if (this.stack.length) this.insertNode(node)
     return node
@@ -297,17 +304,17 @@ BlockQuote.register("parseDOM", "blockquote", {parse: "block"})
 
 for (let i = 1; i <= 6; i++) Heading.registerComputed("parseDOM", "h" + i, type => {
   if (i <= type.maxLevel) return {
-    parse: function(dom, state) { state.wrapIn(dom, this, {level: i}) }
+    parse(dom, state) { state.wrapIn(dom, this, {level: i}) }
   }
 })
 
 HorizontalRule.register("parseDOM", "hr", {parse: "block"})
 
-CodeBlock.register("parseDOM", "pre", {parse: function(dom, state) {
+CodeBlock.register("parseDOM", "pre", {parse(dom, state) {
   let params = dom.firstChild && /^code$/i.test(dom.firstChild.nodeName) && dom.firstChild.getAttribute("class")
   if (params && /fence/.test(params)) {
     let found = [], re = /(?:^|\s)lang-(\S+)/g, m
-    while (m = re.test(params)) found.push(m[1])
+    while (m = re.exec(params)) found.push(m[1])
     params = found.join(" ")
   } else {
     params = null
@@ -318,18 +325,18 @@ CodeBlock.register("parseDOM", "pre", {parse: function(dom, state) {
 
 BulletList.register("parseDOM", "ul", {parse: "block"})
 
-OrderedList.register("parseDOM", "ol", {parse: function(dom, state) {
+OrderedList.register("parseDOM", "ol", {parse(dom, state) {
   let attrs = {order: dom.getAttribute("start") || 1}
   state.wrapIn(dom, this, attrs)
 }})
 
 ListItem.register("parseDOM", "li", {parse: "block"})
 
-HardBreak.register("parseDOM", "br", {parse: function(_, state) {
+HardBreak.register("parseDOM", "br", {parse(_, state) {
   state.insert(this)
 }})
 
-Image.register("parseDOM", "img", {parse: function(dom, state) {
+Image.register("parseDOM", "img", {parse(dom, state) {
   state.insert(this, {
     src: dom.getAttribute("src"),
     title: dom.getAttribute("title") || null,
@@ -339,7 +346,7 @@ Image.register("parseDOM", "img", {parse: function(dom, state) {
 
 // Inline style tokens
 
-LinkMark.register("parseDOM", "a", {parse: function(dom, state) {
+LinkMark.register("parseDOM", "a", {parse(dom, state) {
   let href = dom.getAttribute("href")
   if (!href) return false
   state.wrapMark(dom, this.create({href, title: dom.getAttribute("title")}))
@@ -347,14 +354,14 @@ LinkMark.register("parseDOM", "a", {parse: function(dom, state) {
 
 EmMark.register("parseDOM", "i", {parse: "mark"})
 EmMark.register("parseDOM", "em", {parse: "mark"})
-StrongMark.register("parseDOMStyle", "font-style", {parse: function(value, state, inner) {
+EmMark.register("parseDOMStyle", "font-style", {parse(value, state, inner) {
   if (value == "italic") state.wrapMark(inner, this)
   else inner()
 }})
 
 StrongMark.register("parseDOM", "b", {parse: "mark"})
 StrongMark.register("parseDOM", "strong", {parse: "mark"})
-StrongMark.register("parseDOMStyle", "font-weight", {parse: function(value, state, inner) {
+StrongMark.register("parseDOMStyle", "font-weight", {parse(value, state, inner) {
   if (value == "bold" || value == "bolder" || !/\D/.test(value) && +value >= 500) state.wrapMark(inner, this)
   else inner()
 }})

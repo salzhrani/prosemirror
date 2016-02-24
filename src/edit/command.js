@@ -22,7 +22,7 @@ export class Command {
   constructor(spec, self, name) {
     // :: string The name of the command.
     this.name = name
-    if (!this.name) NamespaceError.raise("Trying to define a command without a name")
+    if (!this.name) throw new NamespaceError("Trying to define a command without a name")
     // :: CommandSpec The command's specifying object.
     this.spec = spec
     this.self = self
@@ -44,7 +44,7 @@ export class Command {
       return new pm.options.commandParamPrompt(pm, this).open()
     } else {
       if (this.params.length != (params ? params.length : 0))
-        AssertionError.raise("Invalid amount of parameters for command " + this.name)
+        throw new AssertionError("Invalid amount of parameters for command " + this.name)
       return run.call(this.self, pm, ...params)
     }
   }
@@ -86,8 +86,8 @@ function deriveCommandSpec(type, spec, name) {
   if (!spec.derive) return spec
   let conf = typeof spec.derive == "object" ? spec.derive : {}
   let dname = conf.name || name
-  let derive = type.constructor.deriveableCommands[dname]
-  if (!derive) AssertionError.raise("Don't know how to derive command " + dname)
+  let derive = type.constructor.derivableCommands[dname]
+  if (!derive) throw new AssertionError("Don't know how to derive command " + dname)
   let derived = derive.call(type, conf)
   for (let prop in spec) if (prop != "derive") derived[prop] = spec[prop]
   return derived
@@ -102,7 +102,7 @@ export class CommandSet {
     this.op = op
   }
 
-  // :: (union<Object<CommandSpec>, string>, ?(string, CommandSpec) → bool) → CommandSet
+  // :: (union<Object<CommandSpec>, "schema">, ?(string, CommandSpec) → bool) → CommandSet
   // Add a set of commands, creating a new command set. If `set` is
   // the string `"schema"`, the commands are retrieved from the
   // editor's schema's [registry](#Schema.registry), otherwise, it
@@ -114,7 +114,7 @@ export class CommandSet {
     return new CommandSet(this, (commands, schema) => {
       function add(name, spec, self) {
         if (!filter || filter(name, spec)) {
-          if (commands[name]) AssertionError.raise("Duplicate definition of command " + name)
+          if (commands[name]) throw new AssertionError("Duplicate definition of command " + name)
           commands[name] = new Command(spec, self, name)
         }
       }
@@ -352,10 +352,10 @@ function fillAttrs(conf, givenParams) {
   return attrs
 }
 
-NodeType.deriveableCommands = Object.create(null)
-MarkType.deriveableCommands = Object.create(null)
+NodeType.derivableCommands = Object.create(null)
+MarkType.derivableCommands = Object.create(null)
 
-MarkType.deriveableCommands.set = function(conf) {
+MarkType.derivableCommands.set = function(conf) {
   return {
     run(pm, ...params) {
       pm.setMark(this, true, fillAttrs(conf, params))
@@ -369,12 +369,12 @@ MarkType.deriveableCommands.set = function(conf) {
   }
 }
 
-MarkType.deriveableCommands.unset = () => ({
+MarkType.derivableCommands.unset = () => ({
   run(pm) { pm.setMark(this, false) },
   select(pm) { return markActive(pm, this) }
 })
 
-MarkType.deriveableCommands.toggle = () => ({
+MarkType.derivableCommands.toggle = () => ({
   run(pm) { pm.setMark(this, null) },
   active(pm) { return markActive(pm, this) },
   select(pm) { return markApplies(pm, this) }
@@ -387,7 +387,7 @@ function isAtTopOfListItem(doc, from, to, listType) {
     listType.canContain(doc.path(from.path.slice(0, from.path.length - 1)))
 }
 
-NodeType.deriveableCommands.wrap = function(conf) {
+NodeType.derivableCommands.wrap = function(conf) {
   return {
     run(pm, ...params) {
       let {from, to, head} = pm.selection, doJoin = false
@@ -434,11 +434,12 @@ function activeTextblockIs(pm, type, attrs) {
   return node.hasMarkup(type, attrs)
 }
 
-NodeType.deriveableCommands.make = conf => ({
+NodeType.derivableCommands.make = conf => ({
   run(pm) {
     let {from, to} = pm.selection
     return pm.tr.setBlockType(from, to, this, conf.attrs).apply(pm.apply.scroll)
   },
+  // FIXME deal with situations where not all text blocks have the same kind
   select(pm) {
     let {from, to, node} = pm.selection
     if (node)
@@ -451,7 +452,7 @@ NodeType.deriveableCommands.make = conf => ({
   }
 })
 
-NodeType.deriveableCommands.insert = function(conf) {
+NodeType.derivableCommands.insert = function(conf) {
   return {
     run(pm, ...params) {
       return pm.tr.replaceSelection(this.create(fillAttrs(conf, params))).apply(pm.apply.scroll)

@@ -1,6 +1,6 @@
 import Keymap from "browserkeymap"
 import {Pos} from "../model"
-import {knownSource, parseFrom, fromDOM, toHTML, toText} from "../format"
+import {parseFrom, fromDOM, toHTML, toText} from "../format"
 
 import {captureKeys} from "./capturekeys"
 import {elt, browser} from "../dom"
@@ -217,14 +217,14 @@ class MouseDown {
 
     this.x = event.clientX; this.y = event.clientY
 
-    addEventListener("mouseup", this.up = this.up.bind(this))
-    addEventListener("mousemove", this.move = this.move.bind(this))
+    window.addEventListener("mouseup", this.up = this.up.bind(this))
+    window.addEventListener("mousemove", this.move = this.move.bind(this))
     pm.sel.fastPoll()
   }
 
   done() {
-    removeEventListener("mouseup", this.up)
-    removeEventListener("mousemove", this.move)
+    window.removeEventListener("mouseup", this.up)
+    window.removeEventListener("mousemove", this.move)
     if (this.mightDrag) {
       this.event.target.draggable = false
       if (browser.gecko && this.setContentEditable)
@@ -337,11 +337,18 @@ handlers.input = (pm) => {
 }
 
 function toClipboard(doc, from, to, dataTransfer) {
-  let fragment = doc.sliceBetween(from, to)
-  let html = `<div pm-sides="${from.depth} ${to.depth}">${toHTML(fragment)}</div>`
+  let found, max = Math.min(from.depth, to.depth)
+  for (let depth = 0, node = doc.sliceBetween(from, to); depth <= max; depth++) {
+    if (node.type.defaultAttrs) found = {depth, node}
+    if (node.size > 1) break
+    node = node.firstChild
+  }
+
+  let attr = `${found.node.type.name} ${from.depth - found.depth} ${to.depth - found.depth}`
+  let html = `<div pm-context="${attr}">${toHTML(found.node)}</div>`
   dataTransfer.clearData()
   dataTransfer.setData("text/html", html)
-  dataTransfer.setData("text/plain", toText(fragment))
+  dataTransfer.setData("text/plain", toText(found.node))
 }
 
 function fromClipboard(pm, dataTransfer, plainText) {
@@ -350,16 +357,15 @@ function fromClipboard(pm, dataTransfer, plainText) {
   if (!html && !txt) return null
   let doc, from, to
   if ((plainText || !html) && txt) {
-    doc = parseFrom(pm.schema, pm.signalPipelined("transformPastedText", txt),
-                    !plainText && knownSource("markdown") ? "markdown" : "text")
+    doc = parseFrom(pm.schema, pm.signalPipelined("transformPastedText", txt), "text")
   } else {
     let dom = document.createElement("div")
     dom.innerHTML = pm.signalPipelined("transformPastedHTML", html)
-    let wrap = dom.querySelector("[pm-sides]"), depths
-    if (wrap && (depths = /^(\d+) (\d+)$/.exec(wrap.getAttribute("pm-sides")))) {
-      doc = fromDOM(pm.schema, wrap)
-      from = posAtLeft(doc, +depths[1])
-      to = posAtRight(doc, +depths[2])
+    let wrap = dom.querySelector("[pm-context]"), context, contextNode, found
+    if (wrap && (context = /^(\w+) (\d+) (\d+)$/.exec(wrap.getAttribute("pm-context"))) &&
+        (contextNode = pm.schema.nodes[context[1]]) && contextNode.defaultAttrs &&
+        (found = parseFromContext(wrap, contextNode, +context[2], +context[3]))) {
+      ;({doc, from, to} = found)
     } else {
       doc = fromDOM(pm.schema, dom)
     }
@@ -369,6 +375,7 @@ function fromClipboard(pm, dataTransfer, plainText) {
           to: to || findSelectionAtEnd(doc).to}
 }
 
+// : (Node, number) → Pos
 function posAtLeft(doc, depth) {
   let path = []
   for (let i = 0, node = doc; i < depth; i++) {
@@ -378,6 +385,7 @@ function posAtLeft(doc, depth) {
   return new Pos(path, 0)
 }
 
+// : (Node, number) → Pos
 function posAtRight(doc, depth) {
   let path = [], node = doc
   for (let i = 0; i < depth; i++) {
@@ -386,6 +394,21 @@ function posAtRight(doc, depth) {
     node = node.lastChild
   }
   return new Pos(path, node.size)
+}
+
+function parseFromContext(dom, contextNode, openLeft, openRight) {
+  let schema = contextNode.schema, top = schema.nodes.doc
+  let doc = fromDOM(schema, dom, {topNode: contextNode.create(), preserveWhitespace: true})
+  if (contextNode != top) {
+    let path = top.findConnection(contextNode)
+    if (!path) return null
+    for (let i = path.length - 1; i >= -1; i--) {
+      doc = (i < 0 ? top : path[i]).create(null, doc)
+      ++openLeft
+      ++openRight
+    }
+  }
+  return {doc, from: posAtLeft(doc, openLeft), to: posAtRight(doc, openRight)}
 }
 
 handlers.copy = handlers.cut = (pm, e) => {
@@ -464,7 +487,11 @@ handlers.dragleave = pm => pm.input.dropTarget.style.display = ""
 handlers.drop = (pm, e) => {
   pm.input.dropTarget.style.display = ""
 
-  if (!e.dataTransfer) return
+  // :: (event: DOMEvent) #path=ProseMirror#events#drop
+  // Fired when a drop event occurs on the editor content. A handler
+  // may declare the event handled by calling `preventDefault` on it
+  // or returning a truthy value.
+  if (!e.dataTransfer || pm.signalDOM(e)) return
 
   let fragment = fromClipboard(pm, e.dataTransfer)
   if (fragment) {

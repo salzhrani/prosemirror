@@ -14,7 +14,7 @@ export const baseCommands = Object.create(null)
 // Get an offset moving backward from a current offset inside a node.
 function moveBackward(parent, offset, by) {
   if (by != "char" && by != "word")
-    AssertionError.raise("Unknown motion unit: " + by)
+    throw new AssertionError("Unknown motion unit: " + by)
 
   let cat = null, counted = 0
   for (;;) {
@@ -155,7 +155,7 @@ baseCommands.deleteWordBefore = {
 
 function moveForward(parent, offset, by) {
   if (by != "char" && by != "word")
-    AssertionError.raise("Unknown motion unit: " + by)
+    throw new AssertionError("Unknown motion unit: " + by)
 
   let cat = null, counted = 0
   for (;;) {
@@ -358,15 +358,15 @@ baseCommands.newlineInCode = {
 }
 
 // ;; #kind=command
-// If a content-less block node is selected, create an empty paragraph
-// before (if it is its parent's first child) or after it.
+// If a block node is selected, create an empty paragraph before (if
+// it is its parent's first child) or after it.
 //
 // **Keybindings:** Enter
 baseCommands.createParagraphNear = {
-  label: "Create a paragraph near the selected leaf block",
+  label: "Create a paragraph near the selected block",
   run(pm) {
     let {from, to, node} = pm.selection
-    if (!node || !node.isBlock || node.type.contains) return false
+    if (!node || !node.isBlock) return false
     let side = from.offset ? to : from
     pm.tr.insert(side, pm.schema.defaultTextblockType().create()).apply(pm.apply.scroll)
     pm.setTextSelection(new Pos(side.toPath(), 0))
@@ -444,7 +444,7 @@ baseCommands.selectParentNode = {
   },
   menu: {
     group: "block", rank: 90,
-    display: {type: "icon", text: "\u2b1a", style: "font-weight: bold; vertical-align: 20%"}
+    display: {type: "icon", text: "\u2b1a", style: "font-weight: bold"}
   },
   keys: ["Esc"]
 }
@@ -541,7 +541,7 @@ function selectNodeVertically(pm, dir) {
     setDOMSelectionToPos(pm, last)
     return false
   }
-  pm.setSelectionDirect(beyond)
+  if (beyond) pm.setSelectionDirect(beyond)
   return true
 }
 
