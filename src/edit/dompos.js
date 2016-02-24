@@ -22,7 +22,7 @@ export function widthFromDOM(dom) {
 
 export function posFromDOM(pm, dom, domOffset, loose) {
   if (!loose && pm.operation && pm.doc != pm.operation.doc)
-    AssertionError.raise("Fetching a position from an outdated DOM structure")
+    throw new AssertionError("Fetching a position from an outdated DOM structure")
 
   if (domOffset == null) {
     domOffset = Array.prototype.indexOf.call(dom.parentNode.childNodes, dom)
@@ -85,7 +85,7 @@ export function pathToDOM(parent, path) {
   let node = parent
   for (let i = 0; i < path.length; i++) {
     node = findByPath(node, path[i])
-    if (!node) AssertionError.raise("Failed to resolve path " + path.join("/"))
+    if (!node) throw new AssertionError("Failed to resolve path " + path.join("/"))
   }
   return node
 }
@@ -104,6 +104,7 @@ function findByOffset(node, offset, after) {
   }
 }
 
+// : (node: DOMNode, offset: number) → {node: DOMNode, offset: number}
 function leafAt(node, offset) {
   for (;;) {
     let child = node.firstChild
@@ -149,7 +150,7 @@ export function scrollIntoView(pm, pos) {
     let rect = atBody ? windowRect() : parent.getBoundingClientRect()
     let moveX = 0, moveY = 0
     if (coords.top < rect.top)
-      moveY =  -(rect.top - coords.top + scrollMargin)
+      moveY = -(rect.top - coords.top + scrollMargin)
     else if (coords.bottom > rect.bottom)
       moveY = coords.bottom - rect.bottom + scrollMargin
     if (coords.left < rect.left)
@@ -157,10 +158,12 @@ export function scrollIntoView(pm, pos) {
     else if (coords.right > rect.right)
       moveX = coords.right - rect.right + scrollMargin
     if (moveX || moveY) {
-      if (atBody) window.scrollBy(moveX, moveY)
-    } else {
-      if (moveY) parent.scrollTop += moveY
-      if (moveX) parent.scrollLeft += moveX
+      if (atBody) {
+        window.scrollBy(moveX, moveY)
+      } else {
+        if (moveY) parent.scrollTop += moveY
+        if (moveX) parent.scrollLeft += moveX
+      }
     }
     if (atBody) break
   }
@@ -168,7 +171,7 @@ export function scrollIntoView(pm, pos) {
 
 function findOffsetInNode(node, coords) {
   let closest, dyClosest = 1e8, coordsClosest, offset = 0
-  for (let child = node.firstChild, i = 0; child; child = child.nextSibling, i++) {
+  for (let child = node.firstChild; child; child = child.nextSibling) {
     let rects
     if (child.nodeType == 1) rects = child.getClientRects()
     else if (child.nodeType == 3) rects = textRects(child)

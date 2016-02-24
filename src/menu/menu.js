@@ -61,18 +61,18 @@ export class MenuCommand {
     }
 
     let disp = this.options.display
-    if (!disp) AssertionError.raise("No display style defined for menu command " + cmd.name)
+    if (!disp) throw new AssertionError("No display style defined for menu command " + cmd.name)
 
     let dom
     if (disp.render) {
-      dom = disp.render(cmd)
+      dom = disp.render(cmd, pm)
     } else if (disp.type == "icon") {
       dom = getIcon(cmd.name, disp)
       if (!disabled && cmd.active(pm)) dom.classList.add(prefix + "-active")
     } else if (disp.type == "label") {
       dom = elt("div", null, disp.label || cmd.spec.label)
     } else {
-      AssertionError.raise("Unsupported command display style: " + disp.type)
+      throw new AssertionError("Unsupported command display style: " + disp.type)
     }
     dom.setAttribute("title", title(pm, cmd))
     if (this.options.class) dom.classList.add(this.options.class)
@@ -165,7 +165,8 @@ export class Dropdown {
   // :: (ProseMirror) → DOMNode
   // Returns a node showing the collapsed menu, which expands when clicked.
   render(pm) {
-    if (resolveGroup(pm, this.content).length == 0) return
+    let items = renderDropdownItems(resolveGroup(pm, this.content), pm)
+    if (!items.length) return
 
     let label = (this.options.activeLabel && this.findActiveIn(this, pm)) || this.options.label
     let dom = elt("div", {class: prefix + "-dropdown " + (this.options.class || ""),
@@ -175,17 +176,20 @@ export class Dropdown {
     dom.addEventListener("mousedown", e => {
       e.preventDefault(); e.stopPropagation()
       if (open && open()) open = null
-      else open = this.expand(pm, dom)
+      else open = this.expand(pm, dom, items)
     })
     return dom
   }
 
-  expand(pm, dom) {
-    let rendered = renderDropdownItems(resolveGroup(pm, this.content), pm)
+  select(pm) {
+    return resolveGroup(pm, this.content).some(e => e.select(pm))
+  }
+
+  expand(pm, dom, items) {
     let box = dom.getBoundingClientRect(), outer = pm.wrapper.getBoundingClientRect()
     let menuDOM = elt("div", {class: prefix + "-dropdown-menu " + (this.options.class || ""),
                               style: "left: " + (box.left - outer.left) + "px; top: " + (box.bottom - outer.top) + "px"},
-                      rendered)
+                      items)
 
     let done = false
     function finish() {
@@ -222,7 +226,6 @@ function renderDropdownItems(items, pm) {
     let inner = items[i].render(pm)
     if (inner) rendered.push(elt("div", {class: prefix + "-dropdown-item"}, inner))
   }
-  if (!rendered.length) rendered.push(elt("div", {class: prefix + "-dropdown-empty"}, "(empty)"))
   return rendered
 }
 
@@ -243,12 +246,12 @@ export class DropdownSubmenu {
   // :: (ProseMirror) → DOMNode
   // Renders the submenu.
   render(pm) {
-    let items = resolveGroup(pm, this.content)
+    let items = renderDropdownItems(resolveGroup(pm, this.content), pm)
     if (!items.length) return
 
     let label = elt("div", {class: prefix + "-submenu-label"}, this.options.label)
     let wrap = elt("div", {class: prefix + "-submenu-wrap"}, label,
-                   elt("div", {class: prefix + "-submenu"}, renderDropdownItems(items, pm)))
+                   elt("div", {class: prefix + "-submenu"}, items))
     label.addEventListener("mousedown", e => {
       e.preventDefault(); e.stopPropagation()
       wrap.classList.toggle(prefix + "-submenu-wrap-active")
@@ -325,8 +328,9 @@ function separator() {
 // :: Object #path=MenuCommandSpec.display
 // Determines how the command is shown in the menu. It may have either
 // a `type` property containing one of the strings shown below, or a
-// `render` property that, when called with the command as argument,
-// returns a DOM node representing the command's menu representation.
+// `render` property that, when called with the command and a
+// `ProseMirror` instance as arguments, returns a DOM node
+// representing the command's menu representation.
 //
 // **`"icon"`**
 //   : Show the command as an icon. The object may have `{path, width,
@@ -335,7 +339,8 @@ function separator() {
 //     and `width` and `height` provide the viewbox in which that path
 //     exists. Alternatively, it may have a `text` property specifying
 //     a string of text that makes up the icon, with an optional
-//     `style` property giving additional CSS styling for the text.
+//     `style` property giving additional CSS styling for the text,
+//     _or_ a `dom` property containing a DOM node.
 //
 // **`"label"`**
 //   : Render the command as a label. Mostly useful for commands
@@ -456,10 +461,6 @@ insertCSS(`
 
 .${prefix}-dropdown-item:hover {
   background: #f2f2f2;
-}
-
-.${prefix}-dropdown-empty {
-  opacity: 0.4;
 }
 
 .${prefix}-submenu-wrap {

@@ -29,7 +29,7 @@ const methods = {
       arr[i](...args)
   },
 
-  // :: (type: string, ...args: [any]) #path=EventMixin.signalHandleable
+  // :: (type: string, ...args: [any]) → any #path=EventMixin.signalHandleable
   // Signal a handleable event of the given type. All handlers for the
   // event will be called with the given arguments, until one of them
   // returns something that is not the value `false`. When that
@@ -44,7 +44,7 @@ const methods = {
     return false
   },
 
-  // :: (type: string, value: any)
+  // :: (type: string, value: any) → any #path=EventMixin.signalPipelined
   // Give all handlers for an event a chance to transform a value. The
   // value returned from a handler will be passed to the next handler.
   // The method returns the value returned by the final handler (or
@@ -54,6 +54,20 @@ const methods = {
     if (arr) for (let i = 0; i < arr.length; ++i)
       value = arr[i](value)
     return value
+  },
+
+  // :: (DOMEvent, ?string) → bool
+  // Fire all handlers for `event.type` (or override the type name
+  // with the `type` parameter), until one of them calls
+  // `preventDefault` on the event or returns `true` to indicate it
+  // handled the event. Return `true` when one of the handlers handled
+  // the event.
+  signalDOM(event, type) {
+    let arr = this._handlers && this._handlers[type || event.type]
+    if (arr) for (let i = 0; i < arr.length; ++i) {
+      if (arr[i](event) || event.defaultPrevented) return true
+    }
+    return false
   },
 
   // :: (type: string) → bool #path=EventMixin.hasHandler

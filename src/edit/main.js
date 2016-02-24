@@ -37,7 +37,7 @@ export class ProseMirror {
     // :: Schema
     // The schema for this editor's document.
     this.schema = opts.schema
-    if (opts.doc == null) opts.doc = this.schema.node("doc", null, [this.schema.node("paragraph")])
+     if (opts.doc == null) opts.doc = this.schema.node("doc", null, [this.schema.node("paragraph")])
     // :: DOMNode
     // The editable DOM node containing the document.
     this.content = elt("div", {class: "ProseMirror-content", "pm-container": true})
@@ -111,10 +111,10 @@ export class ProseMirror {
     this.checkPos(pos, false)
     let parent = this.doc.path(pos.path)
     if (pos.offset >= parent.size)
-      SelectionError.raise("Trying to set a node selection at the end of a node")
+      throw new SelectionError("Trying to set a node selection at the end of a node")
     let node = parent.child(pos.offset)
     if (!node.type.selectable)
-      SelectionError.raise("Trying to select a non-selectable node")
+      throw new SelectionError("Trying to select a non-selectable node")
     this.input.maybeAbortComposition()
     this.sel.setAndSignal(new NodeSelection(pos, pos.move(1), node))
   }
@@ -156,7 +156,7 @@ export class ProseMirror {
 
   setDocInner(doc) {
     if (doc.type != this.schema.nodes.doc)
-      AssertionError.raise("Trying to set a document with a different schema")
+      throw new AssertionError("Trying to set a document with a different schema")
     // :: Node The current document.
     this.doc = doc
     this.ranges = new RangeStore(this)
@@ -199,7 +199,7 @@ export class ProseMirror {
   // Create an editor- and selection-aware `Transform` for this editor.
   get tr() { return new EditorTransform(this) }
 
-  // :: (Transform, ?Object) → ?Transform
+  // :: (Transform, ?Object) → union<Transform,bool>
   // Apply a transformation (which you might want to create with the
   // [`tr` getter](#ProseMirror.tr)) to the document in the editor.
   // The following options are supported:
@@ -217,10 +217,16 @@ export class ProseMirror {
   apply(transform, options = nullOptions) {
     if (transform.doc == this.doc) return false
     if (transform.docs[0] != this.doc && findDiffStart(transform.docs[0], this.doc))
-      AssertionError.raise("Applying a transform that does not start with the current document")
+      throw new AssertionError("Applying a transform that does not start with the current document")
 
+    // :: (transform: Transform, options: Object) #path=ProseMirror#events#beforeTransform
+    // Indicates that the given transform is about to be
+    // [applied](#ProseMirror.apply). The handler may add additional
+    // [steps](#Step) to the transform, but it it not allowed to
+    // interfere with the editor's state.
+    this.signal("beforeTransform", transform, options)
     this.updateDoc(transform.doc, transform, options.selection)
-    // :: (Transform, Object) #path=ProseMirror#events#transform
+    // :: (transfom: Transform, options: Object) #path=ProseMirror#events#transform
     // Signals that a (non-empty) transformation has been aplied to
     // the editor. Passes the `Transform` and the options given to
     // [`apply`](#ProseMirror.apply) as arguments to the handler.
@@ -235,13 +241,18 @@ export class ProseMirror {
   // must also fall within a textblock node.
   checkPos(pos, textblock) {
     if (!pos.isValid(this.doc, textblock))
-      AssertionError.raise("Position " + pos + " is not valid in current document")
+      throw new AssertionError("Position " + pos + " is not valid in current document")
   }
 
-  ensureOperation() {
-    return this.operation || this.startOperation()
+  // : (?Object) → Operation
+  // Ensure that an operation has started.
+  ensureOperation(options) {
+    return this.operation || this.startOperation(options)
   }
 
+  // : (?Object) → Operation
+  // Start an operation and schedule a flush so that any effect of
+  // the operation shows up in the DOM.
   startOperation(options) {
     this.operation = new Operation(this)
     if (!(options && options.readSelection === false) && this.sel.readFromDOM())
@@ -511,6 +522,15 @@ const nullOptions = {}
 
 eventMixin(ProseMirror)
 
+// Operations are used to delay/batch DOM updates. When a change to
+// the editor state happens, it is not immediately flushed to the DOM,
+// but rather a call to `ProseMirror.flush` is scheduled using
+// `requestAnimationFrame`. An object of this class is stored in the
+// editor's `operation` property, and holds information about the
+// state at the start of the operation, which can be used to determine
+// the minimal DOM update needed. It also stores information about
+// whether a focus needs to happen on flush, and whether something
+// needs to be scrolled into view.
 class Operation {
   constructor(pm) {
     this.doc = pm.doc
