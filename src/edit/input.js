@@ -141,7 +141,6 @@ handlers.keydown = (pm, e) => {
 
 handlers.keyup = (pm, e) => {
   if (e.keyCode == 16) pm.input.shiftKey = false
-  pm.sel.pollForUpdate()
 }
 
 // : (ProseMirror, TextSelection, string)
