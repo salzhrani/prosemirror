@@ -50,6 +50,10 @@ export function fromDOM(schema, dom, options) {
 // parsed with an instance of the mark that this spec was associated
 // with added to their marks.
 
+// :: ?string #path=DOMParseSpec.selector
+// A css selector to match against. If present, it will try to match the selector
+// against the dom node prior to calling the parse function.
+
 defineSource("dom", fromDOM)
 
 // :: (Schema, string, ?Object) → Node
@@ -154,7 +158,9 @@ class DOMParseState {
   tryParsers(parsers, dom) {
     if (parsers) for (let i = 0; i < parsers.length; i++) {
       let parser = parsers[i]
-      if (parser.parse.call(parser.type, dom, this) !== false) return true
+      if ((!parser.selector || matches(dom, parser.selector)) &&
+          parser.parse.call(parser.type, dom, this) !== false)
+        return true
     }
   }
 
@@ -264,6 +270,10 @@ class DOMParseState {
   }
 }
 
+function matches(dom, selector) {
+  return (dom.matches || dom.msMatchesSelector || dom.webkitMatchesSelector || dom.mozMatchesSelector).call(dom, selector)
+}
+
 function parseStyles(style) {
   let re = /\s*([\w-]+)\s*:\s*([^;]+)/g, m, result = []
   while (m = re.exec(style)) result.push(m[1], m[2].trim())
@@ -285,6 +295,7 @@ function summarizeSchemaInfo(schema) {
       parse = function(dom, state) { state.wrapMark(dom, this) }
     sortedInsert(tags[tag] || (tags[tag] = []), {
       type, parse,
+      selector: info.selector,
       rank: info.rank == null ? 50 : info.rank
     }, (a, b) => a.rank - b.rank)
   })
@@ -346,11 +357,13 @@ Image.register("parseDOM", "img", {parse(dom, state) {
 
 // Inline style tokens
 
-LinkMark.register("parseDOM", "a", {parse(dom, state) {
-  let href = dom.getAttribute("href")
-  if (!href) return false
-  state.wrapMark(dom, this.create({href, title: dom.getAttribute("title")}))
-}})
+LinkMark.register("parseDOM", "a", {
+  parse(dom, state) {
+    state.wrapMark(dom, this.create({href: dom.getAttribute("href"),
+                                     title: dom.getAttribute("title")}))
+  },
+  selector: "[href]"
+})
 
 EmMark.register("parseDOM", "i", {parse: "mark"})
 EmMark.register("parseDOM", "em", {parse: "mark"})
