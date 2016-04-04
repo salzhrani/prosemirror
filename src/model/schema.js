@@ -186,9 +186,9 @@ export class NodeType extends SchemaItem {
   // Test whether the content of the given fragment could be contained
   // in this node type.
   canContainFragment(fragment) {
-    let ok = true
-    fragment.forEach(n => { if (!this.canContain(n)) ok = false })
-    return ok
+    for (let i = 0; i < fragment.childCount; i++)
+      if (!this.canContain(fragment.child(i))) return false
+    return true
   }
 
   // :: (Node) → bool
@@ -231,7 +231,17 @@ export class NodeType extends SchemaItem {
   // to be inserted between this type and `other` to put a node of
   // type `other` into this type.
   findConnection(other) {
-    if (this.canContainType(other)) return []
+    return other.kind && this.findConnectionToKind(other.kind)
+  }
+
+  findConnectionToKind(kind) {
+    let cache = this.schema.cached.connections, key = this.name + "-" + kind.id
+    if (key in cache) return cache[key]
+    return cache[key] = this.findConnectionToKindInner(kind)
+  }
+
+  findConnectionToKindInner(kind) {
+    if (kind.isSubKind(this.contains)) return []
 
     let seen = Object.create(null)
     let active = [{from: this, via: []}]
@@ -242,7 +252,7 @@ export class NodeType extends SchemaItem {
         if (type.contains && type.defaultAttrs && !(type.contains.id in seen) &&
             current.from.canContainType(type)) {
           let via = current.via.concat(type)
-          if (type.canContainType(other)) return via
+          if (kind.isSubKind(type.contains)) return via
           active.push({from: type, via: via})
           seen[type.contains.id] = true
         }
@@ -266,10 +276,16 @@ export class NodeType extends SchemaItem {
     return new Node(this, this.computeAttrs(attrs, content), Fragment.from(content), Mark.setFrom(marks))
   }
 
-  createAutoFill(attrs, content, marks) {
-    if ((!content || content.length == 0) && !this.canBeEmpty)
-      content = this.defaultContent()
-    return this.create(attrs, content, marks)
+  // FIXME use declarative schema, maybe tie in with .contains
+  checkContent(content, _attrs) {
+    if (content.size == 0) return this.canBeEmpty
+    for (let i = 0; i < content.childCount; i++)
+      if (!this.canContain(content.child(i))) return false
+    return true
+  }
+
+  fixContent(_content, _attrs) {
+    return this.defaultContent()
   }
 
   // :: bool
@@ -296,17 +312,47 @@ export class NodeType extends SchemaItem {
 
 // ;; Class used to represent node [kind](#NodeType.kind).
 export class NodeKind {
-  // :: (string, [NodeKind])
+  // :: (string, ?[NodeKind], ?[NodeKind])
   // Create a new node kind with the given set of superkinds (the new
-  // kind counts as a member of each of the superkinds). The `name`
-  // field is only for debugging purposes—kind equivalens is defined
-  // by identity.
-  constructor(name, ...supers) {
+  // kind counts as a member of each of the superkinds) and subkinds
+  // (which will count as a member of this new kind). The `name` field
+  // is only for debugging purposes—kind equivalens is defined by
+  // identity.
+  constructor(name, supers, subs) {
     this.name = name
-    this.supers = Object.create(null)
     this.id = ++NodeKind.nextID
-    this.supers[this.id] = true
-    supers.forEach(sup => { for (let id in sup.supers) this.supers[id] = true })
+    this.supers = Object.create(null)
+    this.supers[this.id] = this
+    this.subs = subs || []
+
+    if (supers) supers.forEach(sup => this.addSuper(sup))
+    if (subs) subs.forEach(sub => this.addSub(sub))
+  }
+
+  sharedSuperKind(other) {
+    if (this.isSubKind(other)) return other
+    if (other.isSubKind(this)) return this
+    let found
+    for (let id in this.supers) {
+      let shared = other.supers[id]
+      if (shared && (!found || shared.isSupKind(found)))
+        found = shared
+    }
+    return found
+  }
+
+  addSuper(sup) {
+    for (let id in sup.supers) {
+      this.supers[id] = sup.supers[id]
+      sup.subs.push(this)
+    }
+  }
+
+  addSub(sub) {
+    if (this.supers[sub.id])
+      throw new SchemaError("Circular subkind relation")
+    sub.supers[this.id] = true
+    sub.subs.forEach(next => this.addSub(next))
   }
 
   // :: (NodeKind) → bool
@@ -326,7 +372,7 @@ NodeKind.inline = new NodeKind("inline")
 
 // :: NodeKind The node kind used for text nodes. Subkind of
 // `NodeKind.inline`.
-NodeKind.text = new NodeKind("text", NodeKind.inline)
+NodeKind.text = new NodeKind("text", [NodeKind.inline])
 
 // ;; Base type for block nodetypes.
 export class Block extends NodeType {
@@ -544,6 +590,7 @@ export class Schema {
     // compute and cache per schema. (If you want to store something
     // in it, try to use property names unlikely to clash.)
     this.cached = Object.create(null)
+    this.cached.connections = Object.create(null)
 
     this.node = this.node.bind(this)
     this.text = this.text.bind(this)
@@ -575,7 +622,8 @@ export class Schema {
   }
 
   // :: (string, ?[Mark]) → Node
-  // Create a text node in the schema. This method is bound to the Schema.
+  // Create a text node in the schema. This method is bound to the
+  // Schema. Empty text nodes are not allowed.
   text(text, marks) {
     return this.nodes.text.create(null, text, Mark.setFrom(marks))
   }

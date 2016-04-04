@@ -1,5 +1,6 @@
 import {defTest} from "../tests"
 import {ProseMirror} from "../../edit/main"
+import {dispatchKey} from "../../edit/input"
 
 let tempPMs = null
 
@@ -14,8 +15,8 @@ export function tempEditors(options) {
     options.place = space
     let pm = new ProseMirror(options)
     let a = options.doc && options.doc.tag && options.doc.tag.a
-    if (a) {
-      if (options.doc.path(a.path).isTextblock) pm.setTextSelection(a, options.doc.tag.b)
+    if (a != null) {
+      if (options.doc.resolve(a).parent.isTextblock) pm.setTextSelection(a, options.doc.tag.b)
       else pm.setNodeSelection(a)
     }
     return pm
@@ -34,3 +35,6 @@ export function namespace(space, defaults) {
     defTest(space + "_" + name, () => f(tempEditor(options)))
   }
 }
+
+const event = {preventDefault: () => null}
+export function dispatch(pm, key) { dispatchKey(pm, key, event) }

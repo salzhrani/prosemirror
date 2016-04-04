@@ -8,13 +8,13 @@
 // * The [schema](#Schema) types used to tag and constrain the
 //   document structure
 //
-// * The data type for document [positions](#Pos)
-//
 // This module does not depend on the browser API being available
 // (i.e. you can load it into any JavaScript environment).
 
-export {Node} from "./node"
-export {Fragment, emptyFragment} from "./fragment"
+export {Node, PosContext} from "./node"
+export {ResolvedPos} from "./resolvedpos"
+export {Fragment} from "./fragment"
+export {Slice, ReplaceError} from "./replace"
 export {Mark} from "./mark"
 
 export {SchemaSpec, Schema, SchemaError,
@@ -23,8 +23,6 @@ export {SchemaSpec, Schema, SchemaError,
 export {defaultSchema, Doc, BlockQuote, OrderedList, BulletList, ListItem,
         HorizontalRule, Paragraph, Heading, CodeBlock, Image, HardBreak,
         CodeMark, EmMark, StrongMark, LinkMark} from "./defaultschema"
-
-export {Pos} from "./pos"
 
 export {findDiffStart, findDiffEnd} from "./diff"
 

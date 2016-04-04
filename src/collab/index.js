@@ -1,6 +1,7 @@
 import {defineOption} from "../edit"
 import {eventMixin} from "../util/event"
 import {AssertionError} from "../util/error"
+import {Transform} from "../transform"
 
 import {rebaseSteps} from "./rebase"
 export {rebaseSteps}
@@ -67,13 +68,13 @@ class Collab {
     pm.on("beforeSetDoc", this.onSetDoc = () => {
       throw new AssertionError("setDoc is not supported on a collaborative editor")
     })
-    pm.history.allowCollapsing = false
+    pm.history.preserveMaps++
   }
 
   detach() {
     this.pm.off("transform", this.onTransform)
     this.pm.off("beforeSetDoc", this.onSetDoc)
-    this.pm.history.allowCollapsing = true
+    this.pm.history.preserveMaps--
   }
 
   // :: () → bool
@@ -114,22 +115,23 @@ class Collab {
   // Returns the [position maps](#PosMap) produced by applying the
   // steps.
   receive(steps) {
-    let doc = this.versionDoc
-    let maps = steps.map(step => {
-      let result = step.apply(doc)
-      doc = result.doc
-      return result.map
-    })
+    let transform = new Transform(this.versionDoc)
+    steps.forEach(step => transform.step(step))
     this.version += steps.length
-    this.versionDoc = doc
+    this.versionDoc = transform.doc
 
-    let rebased = rebaseSteps(doc, maps, this.unconfirmedSteps, this.unconfirmedMaps)
+    let rebased = rebaseSteps(transform.doc, transform.maps, this.unconfirmedSteps, this.unconfirmedMaps)
     this.unconfirmedSteps = rebased.transform.steps.slice()
     this.unconfirmedMaps = rebased.transform.maps.slice()
 
+    let selectionBefore = this.pm.selection
     this.pm.updateDoc(rebased.doc, rebased.mapping)
-    this.pm.history.rebased(maps, rebased.transform, rebased.positions)
-    return maps
+    this.pm.history.rebased(transform.maps, rebased.transform, rebased.positions)
+    // :: (transform: Transform, selectionBeforeTransform: Selection) #path=Collab#events#collabTransform
+    // Signals that a transformation has been aplied to the editor. Passes the `Transform` and the selection
+    // before the transform as arguments to the handler.
+    this.signal("collabTransform", transform, selectionBefore)
+    return transform.maps
   }
 }
 
