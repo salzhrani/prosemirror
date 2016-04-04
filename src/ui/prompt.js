@@ -69,13 +69,6 @@ export class ParamPrompt {
       submit()
     })
 
-    this.form.addEventListener("change", e => {
-      if (e.target.type === 'radio') {
-        e.preventDefault()
-        submit()
-      }
-    })
-
     this.form.addEventListener("keydown", e => {
       if (e.keyCode == 27) {
         e.preventDefault()
@@ -202,23 +195,6 @@ ParamPrompt.prototype.paramTypes.select = {
   },
   read(dom) {
     return dom.value
-  }
-}
-
-ParamPrompt.prototype.paramTypes.radio = {
-  render(param, value) {
-    let options = param.options.call ? param.options(this) : param.options
-    return elt("div",
-      {class: "ProseMirror-radio" + (param.name ? " ProseMirror-radio-" + param.name : '')},
-      options.map(o => {
-        let el = elt("label", {'data-for': o.value}, [elt("input", {class: 'ProseMirror-radio-input', type: "radio", value: o.value, name: param.name}), o.label || ''])
-        el.checked = o.value == value
-        return el;
-      }))
-  },
-  read(dom) {
-    let checked = dom.querySelector('input:checked');
-    return checked && checked.value
   }
 }
 
