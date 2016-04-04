@@ -4,9 +4,15 @@ import {ParamPrompt} from "../ui/prompt"
 
 import {CommandSet, updateCommands} from "./command"
 
+// An option encapsulates functionality for an editor instance,
+// e.g. the amount of history events that the editor should hold
+// onto or the document's schema.
 class Option {
   constructor(defaultValue, update, updateOnInit) {
     this.defaultValue = defaultValue
+    // A function that will be invoked with the option's old and new
+    // value every time the option is [set](#ProseMirror.setOption).
+    // This function should bootstrap option functionality.
     this.update = update
     this.updateOnInit = updateOnInit !== false
   }
@@ -72,6 +78,12 @@ defineOption("commandParamPrompt", ParamPrompt)
 // The label of the editor. When set, the editable DOM node gets an
 // `aria-label` attribute with this value.
 defineOption("label", null)
+
+// :: ?(string) → string #path=translate #kind=option
+// Optional function to translate strings such as menu labels and prompts.
+// When set, should be a function that takes a string as argument and returns
+// a string, i.e. :: (string) → string
+defineOption("translate", null) // FIXME create a way to explicitly force a menu redraw
 
 export function parseOptions(obj) {
   let result = Object.create(null)

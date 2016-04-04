@@ -1,4 +1,3 @@
-import {Pos} from "../model"
 import {defineOption} from "../edit"
 import {elt, insertCSS} from "../dom"
 import {Tooltip} from "../ui/tooltip"
@@ -59,7 +58,7 @@ class TooltipMenu {
 
     this.showLinks = this.config.showLinks !== false
     this.selectedBlockMenu = this.config.selectedBlockMenu
-    this.updater = new UpdateScheduler(pm, "change selectionChange blur commandsChanged", () => this.update())
+    this.updater = new UpdateScheduler(pm, "change selectionChange blur focus commandsChanged", () => this.update())
     this.onContextMenu = this.onContextMenu.bind(this)
     pm.content.addEventListener("contextmenu", this.onContextMenu)
 
@@ -90,12 +89,13 @@ class TooltipMenu {
       }
     } else if (!empty) {
       return () => {
-        let coords = node ? topOfNodeSelection(this.pm) : topCenterOfSelection()
-        let showBlock = this.selectedBlockMenu && Pos.samePath(from.path, to.path) &&
-            from.offset == 0 && to.offset == this.pm.doc.path(from.path).size
+        let coords = node ? topOfNodeSelection(this.pm) : topCenterOfSelection(), $from
+        let showBlock = this.selectedBlockMenu &&
+            ($from = this.pm.doc.resolve(from)).parentOffset == 0 &&
+            $from.end($from.depth) == to
         return () => this.show(showBlock ? this.selectedBlockContent : this.inlineContent, coords)
       }
-    } else if (this.selectedBlockMenu && this.pm.doc.path(from.path).size == 0) {
+    } else if (this.selectedBlockMenu && this.pm.doc.resolve(from).parent.content.size == 0) {
       return () => {
         let coords = this.pm.coordsAtPos(from)
         return () => this.show(this.blockContent, coords)

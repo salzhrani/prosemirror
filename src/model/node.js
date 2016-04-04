@@ -1,6 +1,8 @@
-import {Fragment, emptyFragment} from "./fragment"
+import {Fragment} from "./fragment"
 import {Mark} from "./mark"
-import {Pos} from "./pos"
+import {ModelError} from "./error"
+import {Slice, replace} from "./replace"
+import {ResolvedPos} from "./resolvedpos"
 
 const emptyArray = [], emptyAttrs = Object.create(null)
 
@@ -30,7 +32,7 @@ export class Node {
 
     // :: Fragment
     // The node's content.
-    this.content = content || emptyFragment
+    this.content = content || Fragment.empty
 
     // :: [Mark]
     // The marks (things like whether it is emphasized or part of a
@@ -39,54 +41,27 @@ export class Node {
   }
 
   // :: number
-  // The size of the node's content, which is the maximum offset in
-  // the node. For nodes that don't contain text, this is also the
-  // number of child nodes that the node has.
-  get size() { return this.content.size }
+  // The size of this node. For text node, this is the amount of
+  // characters. For leaf nodes, it is one. And for non-leaf nodes, it
+  // is the size of the content plus two (the start and end token).
+  get nodeSize() { return this.type.contains ? 2 + this.content.size : 1 }
 
   // :: number
-  // The width of this node. Always 1 for non-text nodes, and the
-  // length of the text for text nodes.
-  get width() { return 1 }
+  // The number of children that the node has.
+  get childCount() { return this.content.childCount }
 
   // :: (number) → Node
-  // Retrieve the child at the given offset. Note that this is **not**
-  // the appropriate way to loop over a node. `child`'s complexity may
-  // be non-constant for some nodes, and it will return the same node
-  // multiple times when calling it for different offsets within a
-  // text node.
-  child(off) { return this.content.child(off) }
+  // Get the child node at the given index. Raise an error when the
+  // index is out of range.
+  child(index) { return this.content.child(index) }
 
-  // :: (?number, ?number) → Iterator<Node>
-  // Create an iterator over this node's children, optionally starting
-  // and ending at a given offset.
-  iter(start, end) { return this.content.iter(start, end) }
+  // :: (number) → ?Node
+  // Get the child node at the given index, if it exists.
+  maybeChild(index) { return this.content.maybeChild(index) }
 
-  // :: (?number, ?number) → Iterator<Node>
-  // Create a reverse iterator (iterating from the node's end towards
-  // its start) over this node's children, optionally starting and
-  // ending at a given offset. **Note**: if given, `start` should be
-  // greater than (or equal) to `end`.
-  reverseIter(start, end) { return this.content.reverseIter(start, end) }
-
-  // :: (number) → {start: number, node: Node}
-  // Find the node that sits before a given offset. Can be used to
-  // find out which text node covers a given offset. The `start`
-  // property of the return value is the starting offset of the
-  // returned node. It is an error to call this with offset 0.
-  chunkBefore(off) { return this.content.chunkBefore(off) }
-
-  // :: (number) → {start: number, node: Node}
-  // Find the node that sits after a given offset. The `start`
-  // property of the return value is the starting offset of the
-  // returned node. It is an error to call this with offset
-  // corresponding to the end of the node.
-  chunkAfter(off) { return this.content.chunkAfter(off) }
-
-  // :: ((node: Node, start: number, end: number))
-  // Call the given function for each child node. The function will be
-  // given the node, as well as its start and end offsets, as
-  // arguments.
+  // :: ((node: Node, offset: number))
+  // Call `f` for every child node, passing the node and its offset
+  // into this parent node.
   forEach(f) { this.content.forEach(f) }
 
   // :: string
@@ -103,6 +78,12 @@ export class Node {
   // Returns this node's last child, or `null` if there are no
   // children.
   get lastChild() { return this.content.lastChild }
+
+  // :: (Node) → bool
+  // Test whether two nodes represent the same content.
+  eq(other) {
+    return this == other || (this.sameMarkup(other) && this.content.eq(other.content))
+  }
 
   // :: (Node) → bool
   // Compare the markup (type, attributes, and marks) of this node to
@@ -129,6 +110,7 @@ export class Node {
   // Create a new node with the same markup as this node, containing
   // the given content (or empty, if no content is given).
   copy(content = null) {
+    if (content == this.content) return this
     return new this.constructor(this.type, this.attrs, content, this.marks)
   }
 
@@ -143,156 +125,101 @@ export class Node {
   // Create a copy of this node with only the content between the
   // given offsets. If `to` is not given, it defaults to the end of
   // the node.
-  slice(from, to) {
-    return this.copy(this.content.slice(from, to))
+  cut(from, to) {
+    if (from == 0 && to == this.content.size) return this
+    return this.copy(this.content.cut(from, to))
   }
 
-  // :: (number, number, Fragment) → Node
-  // Create a copy of this node with the content between the given
-  // offsets replaced by the given fragment.
-  splice(from, to, replace) {
-    return this.copy(this.content.slice(0, from).append(replace).append(this.content.slice(to)))
+  // :: (number, ?number) → Slice
+  // Cut out the part of the document between the given positions, and
+  // return it as a `Slice` object.
+  slice(from, to = this.content.size) {
+    if (from == to) return Slice.empty
+
+    let $from = this.resolve(from), $to = this.resolve(to)
+    let depth = $from.sameDepth($to), start = $from.start(depth)
+    let content = $from.node(depth).content.cut($from.pos - start, $to.pos - start)
+    return new Slice(content, $from.depth - depth, $to.depth - depth)
   }
 
-  // :: (Fragment, ?number, ?number) → Node
-  // [Append](#Fragment.append) the given fragment to this node's
-  // content, and create a new node with the result.
-  append(fragment, joinLeft = 0, joinRight = 0) {
-    return this.copy(this.content.append(fragment, joinLeft, joinRight))
+  // :: (number, number, Slice) → Node
+  // Replace the part of the document between the given positions with
+  // the given slice. The slice must 'fit', meaning its open sides
+  // must be able to connect to the surrounding content, and its
+  // content nodes must be valid children for the node they are placed
+  // into. If any of this is violated, an error of type `ReplaceError`
+  // is thrown.
+  replace(from, to, slice) {
+    return replace(this.resolve(from), this.resolve(to), slice)
   }
 
-  // :: (number, Node) → Node
-  // Return a copy of this node with the child at the given offset
-  // replaced by the given node. **Note**: The offset should not fall
-  // within a text node.
-  replace(pos, node) {
-    return this.copy(this.content.replace(pos, node))
+  // :: (number) → ?Node
+  // Find the node after the given position.
+  nodeAt(pos) {
+    for (let node = this;;) {
+      let index = findIndex(node.content, pos)
+      node = node.maybeChild(index)
+      if (!node) return null
+      if (foundOffset == pos || node.isText) return node
+      pos -= foundOffset + 1
+    }
   }
 
-  // :: ([number], Node) → Node
-  // Return a copy of this node with the descendant at `path` replaced
-  // by the given replacement node. This will copy as many sub-nodes as
-  // there are elements in `path`.
-  replaceDeep(path, node, depth = 0) {
-    if (depth == path.length) return node
-    let pos = path[depth]
-    return this.replace(pos, this.child(pos).replaceDeep(path, node, depth + 1))
-  }
-
-  // :: (number, string) → Node
-  // “Close” this node by making sure that, if it is empty, and is not
-  // allowed to be so, it has its default content inserted. When depth
-  // is greater than zero, sub-nodes at the given side (which can be
-  // `"start"` or `"end"`) are closed too. Returns itself if no work
-  // is necessary, or a closed copy if something did need to happen.
-  close(depth, side) {
-    if (depth == 0 && this.size == 0 && !this.type.canBeEmpty)
-      return this.copy(this.type.defaultContent())
-    let closedContent
-    if (depth > 0 && (closedContent = this.content.close(depth - 1, side)) != this.content)
-      return this.copy(closedContent)
-    return this
-  }
-
-  // :: ([number]) → Node
-  // Get the descendant node at the given path, which is interpreted
-  // as a series of offsets into successively deeper nodes. For example,
-  // if a node contains a paragraph and a list with 3 items, the path
-  // to the first item in the list would be [1, 0].
-  path(path) {
-    for (var i = 0, node = this; i < path.length; node = node.child(path[i]), i++) {}
-    return node
-  }
-
-  // :: (Pos) → ?Node
-  // Get the node after the given position, if any.
+  // :: (number) → {node: ?Node, index: number, offset: number}
+  // Find the (direct) child node after the given offset, if any,
+  // and return it along with its index and offset relative to this
+  // node.
   nodeAfter(pos) {
-    let parent = this.path(pos.path)
-    return pos.offset < parent.size ? parent.child(pos.offset) : null
+    let index = findIndex(this.content, pos)
+    return {node: this.content.maybeChild(index), index, offset: foundOffset}
   }
 
-  // :: ([number]) → [Node]
-  // Get an array of all nodes along a path.
-  pathNodes(path) {
-    let nodes = []
-    for (var i = 0, node = this;; i++) {
-      nodes.push(node)
-      if (i == path.length) break
-      node = node.child(path[i])
-    }
-    return nodes
+  // :: (number) → {node: ?Node, index: number, offset: number}
+  // Find the (direct) child node before the given offset, if any,
+  // and return it along with its index and offset relative to this
+  // node.
+  nodeBefore(pos) {
+    if (pos == 0) return {node: null, index: 0, offset: 0}
+    let index = findIndex(this.content, pos)
+    if (foundOffset < pos) return {node: this.content.child(index), index, offset: foundOffset}
+    let node = this.content.child(index - 1)
+    return {node, index: index - 1, offset: foundOffset - node.nodeSize}
   }
 
-  // :: (Pos, Pos) → {from: Pos, to: Pos}
-  // Finds the narrowest sibling range (two positions that both point
-  // into the same node) that encloses the given positions.
-  siblingRange(from, to) {
-    for (let i = 0, node = this;; i++) {
-      if (node.isTextblock) {
-        let path = from.path.slice(0, i - 1), offset = from.path[i - 1]
-        return {from: new Pos(path, offset), to: new Pos(path, offset + 1)}
-      }
-      let fromEnd = i == from.path.length, toEnd = i == to.path.length
-      let left = fromEnd ? from.offset : from.path[i]
-      let right = toEnd ? to.offset : to.path[i]
-      if (fromEnd || toEnd || left != right) {
-        let path = from.path.slice(0, i)
-        return {from: new Pos(path, left), to: new Pos(path, right + (toEnd ? 0 : 1))}
-      }
-      node = node.child(left)
-    }
-  }
-
-  // :: (?Pos, ?Pos, (node: Node, path: [number], parent: Node))
+  // :: (?number, ?number, (node: Node, pos: number, parent: Node))
   // Iterate over all nodes between the given two positions, calling
-  // the callback with the node, the path towards it, and its parent
-  // node, as arguments. `from` and `to` may be `null` to denote
-  // starting at the start of the node or ending at its end. Note that
-  // the path passed to the callback is mutated as iteration
-  // continues, so if you want to preserve it, make a copy.
-  nodesBetween(from, to, f, path = [], parent = null) {
-    if (f(this, path, parent) === false) return
-    this.content.nodesBetween(from, to, f, path, this)
+  // the callback with the node, its position, and its parent
+  // node. `from` and `to` may be left off, to denote
+  // starting at the start of the node or ending at its end.
+  nodesBetween(from, to, f, pos = 0) {
+    this.content.nodesBetween(from, to, f, pos, this)
   }
 
-  // :: (?Pos, ?Pos, (node: Node, path: [number], start: number, end: number, parent: Node))
-  // Calls the given function for each inline node between the two
-  // given positions. Pass null for `from` or `to` to start or end at
-  // the start or end of the node.
-  inlineNodesBetween(from, to, f) {
-    this.nodesBetween(from, to, (node, path, parent) => {
-      if (node.isInline) {
-        let last = path.length - 1
-        f(node, path.slice(0, last), path[last], path[last] + node.width, parent)
-      }
-    })
-  }
+  // :: (number) → ResolvedPos
+  // Resolve the given position in the document, returning an object
+  // describing its path through the document.
+  resolve(pos) { return resolvePosCached(this, pos) }
 
-  // :: (?Pos, ?Pos) → Node
-  // Returns a copy of this node containing only the content between
-  // `from` and `to`. You can pass `null` for either of them to start
-  // or end at the start or end of the node.
-  sliceBetween(from, to, depth = 0) {
-    return this.copy(this.content.sliceBetween(from, to, depth))
-  }
+  resolveNoCache(pos) { return resolvePos(this, pos) }
 
-  // :: (Pos) → [Mark]
+  // :: (number) → [Mark]
   // Get the marks of the node before the given position or, if that
   // position is at the start of a non-empty node, those of the node
   // after it.
   marksAt(pos) {
-    let parent = this.path(pos.path)
-    if (!parent.isTextblock || !parent.size) return emptyArray
-    return parent.chunkBefore(pos.offset || 1).node.marks
+    let $pos = this.resolve(pos), top = $pos.parent, index = $pos.index($pos.depth)
+    let leaf = $pos.offset($pos.depth) == $pos.parentOffset && index ? top.child(index - 1) : top.maybeChild(index)
+    return leaf ? leaf.marks : emptyArray
   }
 
-  // :: (?Pos, ?Pos, MarkType) → bool
+  // :: (?number, ?number, MarkType) → bool
   // Test whether a mark of the given type occurs in this document
   // between the two given positions.
   rangeHasMark(from, to, type) {
     let found = false
     this.nodesBetween(from, to, node => {
       if (type.isInSet(node.marks)) found = true
+      return !found
     })
     return found
   }
@@ -321,7 +248,7 @@ export class Node {
   toString() {
     let name = this.type.name
     if (this.content.size)
-      name += "(" + this.content.toString() + ")"
+      name += "(" + this.content.toStringInner() + ")"
     return wrapMarks(this.marks, name)
   }
 
@@ -333,15 +260,12 @@ export class Node {
       obj.attrs = this.attrs
       break
     }
-    if (this.size)
+    if (this.content.size)
       obj.content = this.content.toJSON()
     if (this.marks.length)
       obj.marks = this.marks.map(n => n.toJSON())
     return obj
   }
-
-  // This is a hack to be able to treat a node object as an iterator result
-  get value() { return this }
 
   // :: (Schema, Object) → Node
   // Deserialize a node from its JSON representation.
@@ -350,18 +274,18 @@ export class Node {
     let content = json.text != null ? json.text : Fragment.fromJSON(schema, json.content)
     return type.create(json.attrs, content, json.marks && json.marks.map(schema.markFromJSON))
   }
-}
 
-if (typeof Symbol != "undefined") {
-  // :: () → Iterator<Node>
-  // A fragment is iterable, in the ES6 sense.
-  Node.prototype[Symbol.iterator] = function() { return this.iter() }
+  // This is a hack to be able to treat a node object as an iterator result
+  get value() { return this }
 }
 
 // ;; #forward=Node
 export class TextNode extends Node {
   constructor(type, attrs, content, marks) {
     super(type, attrs, null, marks)
+
+    if (!content) throw new ModelError("Empty text nodes are not allowed")
+
     // :: ?string
     // For text nodes, this contains the node's text content.
     this.text = content
@@ -371,10 +295,19 @@ export class TextNode extends Node {
 
   get textContent() { return this.text }
 
-  get width() { return this.text.length }
+  get nodeSize() { return this.text.length }
 
   mark(marks) {
     return new TextNode(this.type, this.attrs, this.text, marks)
+  }
+
+  cut(from = 0, to = this.text.length) {
+    if (from == 0 && to == this.text.length) return this
+    return this.copy(this.text.slice(from, to))
+  }
+
+  eq(other) {
+    return this.sameMarkup(other) && this.text == other.text
   }
 
   toJSON() {
@@ -388,4 +321,47 @@ function wrapMarks(marks, str) {
   for (let i = marks.length - 1; i >= 0; i--)
     str = marks[i].type.name + "(" + str + ")"
   return str
+}
+
+let foundOffset = 0
+function findIndex(fragment, pos, round = -1) {
+  if (pos == 0) { foundOffset = pos; return 0 }
+  if (pos == fragment.size) { foundOffset = pos; return fragment.content.length }
+  if (pos > fragment.size || pos < 0) throw new ModelError(`Position ${pos} outside of fragment (${fragment})`)
+  for (let i = 0, curPos = 0;; i++) {
+    let cur = fragment.child(i), end = curPos + cur.nodeSize
+    if (end >= pos) {
+      if (end == pos || round > 0) { foundOffset = end; return i + 1 }
+      foundOffset = curPos; return i
+    }
+    curPos = end
+  }
+}
+
+function resolvePos(doc, pos) {
+  if (!(pos >= 0 && pos <= doc.content.size)) throw new ModelError("Position " + pos + " out of range")
+  let nodes = [], index = [], offset = [], parentOffset = pos
+  for (let node = doc;;) {
+    let i = findIndex(node.content, parentOffset)
+    let rem = parentOffset - foundOffset
+    nodes.push(node)
+    offset.push(foundOffset)
+    index.push(i)
+    if (!rem) break
+    node = node.child(i)
+    if (node.isText) break
+    parentOffset = rem - 1
+  }
+  return new ResolvedPos(pos, nodes, index, offset, parentOffset)
+}
+
+let resolveCache = [], resolveCachePos = 0, resolveCacheSize = 6
+function resolvePosCached(doc, pos) {
+  for (let i = 0; i < resolveCache.length; i++) {
+    let cached = resolveCache[i]
+    if (cached.pos == pos && cached.node(0) == doc) return cached
+  }
+  let result = resolveCache[resolveCachePos] = resolvePos(doc, pos)
+  resolveCachePos = (resolveCachePos + 1) % resolveCacheSize
+  return result
 }

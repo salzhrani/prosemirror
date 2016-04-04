@@ -31,9 +31,14 @@ export class ParamPrompt {
         throw new AssertionError("Unsupported parameter type: " + param.type)
       return this.paramTypes[param.type].render.call(this.pm, param, this.defaultValue(param))
     })
+    let promptTitle = elt("h5", {}, (command.spec && command.spec.label) ? pm.translate(command.spec.label) : "")
+    let submitButton = elt("button", {type: "submit", class: "ProseMirror-prompt-submit"}, "Ok")
+    let cancelButton = elt("button", {type: "button", class: "ProseMirror-prompt-cancel"}, "Cancel")
+    cancelButton.addEventListener("click", () => this.close())
     // :: DOMNode
     // An HTML form wrapping the fields.
-    this.form = elt("form", null, this.fields.map(f => elt("div", null, f)))
+    this.form = elt("form", null, promptTitle, this.fields.map(f => elt("div", null, f)),
+                    elt("div", {class: "ProseMirror-prompt-buttons"}, submitButton, " ", cancelButton))
   }
 
   // :: ()
@@ -179,7 +184,7 @@ ParamPrompt.prototype.paramTypes = Object.create(null)
 ParamPrompt.prototype.paramTypes.text = {
   render(param, value) {
     return elt("input", {type: "text",
-                         placeholder: param.label,
+                         placeholder: this.translate(param.label),
                          value,
                          autocomplete: "off"})
   },
@@ -191,7 +196,8 @@ ParamPrompt.prototype.paramTypes.text = {
 ParamPrompt.prototype.paramTypes.select = {
   render(param, value) {
     let options = param.options.call ? param.options(this) : param.options
-    return elt("select", null, options.map(o => elt("option", {value: o.value, selected: o.value == value ? "true" : null}, o.label)))
+    return elt("select", null, options.map(o => elt("option", {value: o.value, selected: o.value == value ? "true" : null},
+                                                    this.translate(o.label))))
   },
   read(dom) {
     return dom.value
@@ -218,7 +224,7 @@ export function openPrompt(pm, content, options) {
   pm.wrapper.appendChild(wrapper)
   if (options && options.pos) {
     wrapper.style.left = (options.pos.left - outerBox.left) + "px"
-    wrapper.style.pos = (options.pos.top - outerBox.top) + "px"
+    wrapper.style.top = (options.pos.top - outerBox.top) + "px"
   } else {
     let blockBox = wrapper.getBoundingClientRect()
     let cX = Math.max(0, outerBox.left) + Math.min(window.innerWidth, outerBox.right) - blockBox.width
@@ -247,6 +253,13 @@ insertCSS(`
   position: absolute;
   border-radius: 3px;
   z-index: 11;
+}
+
+.ProseMirror-prompt h5 {
+  margin: 0;
+  font-weight: normal;
+  font-size: 100%;
+  color: #444;
 }
 
 .ProseMirror-prompt input[type="text"],
@@ -280,4 +293,10 @@ insertCSS(`
   position: absolute;
   min-width: 10em;
 }
+
+.ProseMirror-prompt-buttons {
+  margin-top: 5px;
+  display: none;
+}
+
 `)
