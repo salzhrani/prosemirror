@@ -11,13 +11,14 @@ export class ReplaceError extends ProseMirrorError {}
 // both side are 'open' / cut through.
 export class Slice {
   // :: (Fragment, number, number)
-  constructor(content, openLeft, openRight) {
+  constructor(content, openLeft, openRight, possibleParent) {
     // :: Fragment The slice's content nodes.
     this.content = content
     // :: number The open depth at the start.
     this.openLeft = openLeft
     // :: number The open depth at the end.
     this.openRight = openRight
+    this.possibleParent = possibleParent
   }
 
   // :: number
@@ -94,13 +95,13 @@ function addRange($start, $end, depth, target) {
     startIndex = $start.index(depth)
     if ($start.depth > depth) {
       startIndex++
-    } else if ($start.parentOffset != $start.offset(depth)) {
+    } else if (!$start.atNodeBoundary) {
       addNode($start.nodeAfter, target)
       startIndex++
     }
   }
   for (let i = startIndex; i < endIndex; i++) addNode(node.child(i), target)
-  if ($end && $end.depth == depth && $end.parentOffset != $end.offset(depth))
+  if ($end && $end.depth == depth && !$end.atNodeBoundary)
     addNode($end.nodeBefore, target)
 }
 

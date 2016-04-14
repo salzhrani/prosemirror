@@ -1,5 +1,4 @@
 import {contains} from "../dom"
-import {AssertionError} from "../util/error"
 
 // : (ProseMirror, DOMNode) → number
 // Get the path for a given a DOM node in a document.
@@ -12,10 +11,10 @@ export function posBeforeFromDOM(pm, node) {
   return pos
 }
 
-// : (ProseMirror, DOMNode, number, ?bool) → number
-export function posFromDOM(pm, dom, domOffset, loose) {
-  if (!loose && pm.operation && pm.doc != pm.operation.doc)
-    throw new AssertionError("Fetching a position from an outdated DOM structure")
+// : (ProseMirror, DOMNode, number) → number
+export function posFromDOM(pm, dom, domOffset) {
+  if (pm.operation && pm.doc != pm.operation.doc)
+    throw new RangeError("Fetching a position from an outdated DOM structure")
 
   if (domOffset == null) {
     domOffset = Array.prototype.indexOf.call(dom.parentNode.childNodes, dom)
@@ -49,13 +48,9 @@ export function posFromDOM(pm, dom, domOffset, loose) {
   let start = dom == pm.content ? 0 : posBeforeFromDOM(pm, dom) + 1, before = 0
 
   for (let child = dom.childNodes[domOffset - 1]; child; child = child.previousSibling) {
-    if (child.nodeType == 3) {
-      if (loose) before += child.nodeValue.length
-    } else if (tag = child.getAttribute("pm-offset")) {
+    if (child.nodeType == 1 && (tag = child.getAttribute("pm-offset"))) {
       before += +tag + +child.getAttribute("pm-size")
       break
-    } else if (loose && !child.hasAttribute("pm-ignore")) {
-      before += child.textContent.length
     }
   }
   return start + before + innerOffset
@@ -69,15 +64,15 @@ export function childContainer(dom) {
 // : (DOMNode, number) → {node: DOMNode, offset: number}
 // Find the DOM node and offset into that node that the given document
 // position refers to.
-export function DOMFromPos(pm, pos) {
-  if (pm.operation && pm.doc != pm.operation.doc)
-    throw new AssertionError("Resolving a position in an outdated DOM structure")
+export function DOMFromPos(pm, pos, liberal) {
+  if (!liberal && pm.operation && pm.doc != pm.operation.doc)
+    throw new RangeError("Resolving a position in an outdated DOM structure")
 
   let container = pm.content, offset = pos
   outer: for (;;) {
     for (let child = container.firstChild, i = 0;; child = child.nextSibling, i++) {
       if (!child) {
-        if (offset) throw new AssertionError("Failed to find node at " + pos)
+        if (offset && !liberal) throw new RangeError("Failed to find node at " + pos + " rem = " + offset)
         return {node: container, offset: i}
       }
 
@@ -105,7 +100,7 @@ export function DOMFromPos(pm, pos) {
 export function DOMAfterPos(pm, pos) {
   let {node, offset} = DOMFromPos(pm, pos)
   if (node.nodeType != 1 || offset == node.childNodes.length)
-    throw new AssertionError("No node after pos " + pos)
+    throw new RangeError("No node after pos " + pos)
   return node.childNodes[offset]
 }
 

@@ -23,8 +23,8 @@ function selectNodeHorizontally(pm, dir) {
   if (!node) {
     let $from = pm.doc.resolve(from)
     let {node: nextNode, offset} = dir > 0
-        ? $from.parent.nodeAfter($from.parentOffset)
-        : $from.parent.nodeBefore($from.parentOffset)
+        ? $from.parent.childAfter($from.parentOffset)
+        : $from.parent.childBefore($from.parentOffset)
     if (nextNode) {
       if (nextNode.type.selectable && offset == $from.parentOffset - (dir > 0 ? 0 : nextNode.nodeSize)) {
         pm.setNodeSelection(dir < 0 ? from - nextNode.nodeSize : from)
@@ -97,6 +97,7 @@ function vert(dir) {
 let keys = {
   "Esc": nothing,
   "Enter": nothing,
+  "Ctrl-Enter": nothing,
   "Mod-Enter": nothing,
   "Shift-Enter": nothing,
   "Backspace": nothing,
@@ -130,6 +131,7 @@ let keys = {
 if (browser.mac) {
   keys["Alt-Left"] = horiz(-1)
   keys["Alt-Right"] = horiz(1)
+  keys["Ctrl-Backspace"] = keys["Ctrl-Delete"] = nothing
 }
 
 export const captureKeys = new Keymap(keys)

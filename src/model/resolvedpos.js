@@ -5,12 +5,15 @@
 // resolved position, providing various pieces of context information
 // and helper methods.
 export class ResolvedPos {
-  constructor(pos, nodes, indices, offsets, parentOffset) {
+  constructor(pos, path, parentOffset) {
     // :: number The position that was resolved.
     this.pos = pos
-    this.nodes = nodes
-    this.indices = indices
-    this.offsets = offsets
+    this.path = path
+    // :: number
+    // The number of levels the parent node is from the root. If this
+    // position points directly into the root, it is 0. If it points
+    // into a top-level paragraph, 1, and so on.
+    this.depth = path.length / 3 - 1
     // :: number The offset this position has into its parent node.
     this.parentOffset = parentOffset
   }
@@ -21,37 +24,22 @@ export class ResolvedPos {
   // the parent—text nodes are 'flat' in this model.
   get parent() { return this.node(this.depth) }
 
-  // :: number
-  // The number of levels the parent node is from the root. If this
-  // position points directly into the root, it is 0. If it points
-  // into a top-level paragraph, 1, and so on.
-  get depth() { return this.nodes.length - 1 }
-
   // :: (number) → Node
   // The ancestor node at the given level. `p.node(p.depth)` is the
   // same as `p.parent`.
-  node(depth) { return this.nodes[depth] }
+  node(depth) { return this.path[depth * 3] }
 
   // :: (number) → number
   // The index into the ancestor at the given level. If this points at
   // the 3rd node in the 2nd paragraph on the top level, for example,
   // `p.index(0)` is 2 and `p.index(1)` is 3.
-  index(depth) { return this.indices[depth] }
-
-  // :: (number) → number
-  // The offset into the ancestor at the given level. Note that, if
-  // this position points into the middle of a text node, the offset
-  // at `p.depth` will point _before_ that text node (whereas
-  // `p.parentOffset` will point inside of it).
-  offset(depth) { return this.offsets[depth] }
+  index(depth) { return this.path[depth * 3 + 1] }
 
   // :: (number) → number
   // The (absolute) position at the start of the node at the given
   // level.
   start(depth) {
-    let pos = 0
-    for (let i = 0; i < depth; i++) pos += this.offset(i) + 1
-    return pos
+    return depth == 0 ? 0 : this.path[depth * 3 - 1] + 1
   }
 
   // :: (number) → number
@@ -65,13 +53,24 @@ export class ResolvedPos {
   // The (absolute) position directly before the node at the given
   // level, or, when `level` is `this.level + 1`, the original
   // position.
-  before(depth) { return depth == this.nodes.length ? this.pos : this.start(depth) - 1 }
+  before(depth) {
+    if (!depth) throw new RangeError("There is no position before the top-level node")
+    return depth == this.depth + 1 ? this.pos : this.path[depth * 3 - 1]
+  }
 
   // :: (number) → number
   // The (absolute) position directly after the node at the given
   // level, or, when `level` is `this.level + 1`, the original
   // position.
-  after(depth) { return depth == this.nodes.length ? this.pos : this.end(depth) + 1 }
+  after(depth) {
+    if (!depth) throw new RangeError("There is no position after the top-level node")
+    return depth == this.depth + 1 ? this.pos : this.path[depth * 3 - 1] + this.path[depth * 3].nodeSize
+  }
+
+  // :: bool
+  // True if this position points at a node boundary, false if it
+  // points into a text node.
+  get atNodeBoundary() { return this.path[this.path.length - 1] == this.pos }
 
   // :: ?Node
   // Get the node directly after the position, if any. If the position
@@ -80,7 +79,7 @@ export class ResolvedPos {
   get nodeAfter() {
     let parent = this.parent, index = this.index(this.depth)
     if (index == parent.childCount) return null
-    let dOff = this.parentOffset - this.offset(this.depth), child = parent.child(index)
+    let dOff = this.pos - this.path[this.path.length - 1], child = parent.child(index)
     return dOff ? parent.child(index).cut(dOff) : child
   }
 
@@ -90,7 +89,7 @@ export class ResolvedPos {
   // before the position is returned.
   get nodeBefore() {
     let index = this.index(this.depth)
-    let dOff = this.parentOffset - this.offset(this.depth)
+    let dOff = this.pos - this.path[this.path.length - 1]
     if (dOff) return this.parent.child(index).cut(0, dOff)
     return index == 0 ? null : this.parent.child(index - 1)
   }
@@ -112,8 +111,37 @@ export class ResolvedPos {
 
   toString() {
     let str = ""
-    for (let i = 1; i < this.nodes.length; i++)
+    for (let i = 1; i <= this.depth; i++)
       str += (str ? "/" : "") + this.node(i).type.name + "_" + this.index(i - 1)
     return str + ":" + this.parentOffset
   }
+
+  static resolve(doc, pos) {
+    if (!(pos >= 0 && pos <= doc.content.size)) throw new RangeError("Position " + pos + " out of range")
+    let path = []
+    let start = 0, parentOffset = pos
+    for (let node = doc;;) {
+      let {index, offset} = node.content.findIndex(parentOffset)
+      let rem = parentOffset - offset
+      path.push(node, index, start + offset)
+      if (!rem) break
+      node = node.child(index)
+      if (node.isText) break
+      parentOffset = rem - 1
+      start += offset + 1
+    }
+    return new ResolvedPos(pos, path, parentOffset)
+  }
+
+  static resolveCached(doc, pos) {
+    for (let i = 0; i < resolveCache.length; i++) {
+      let cached = resolveCache[i]
+      if (cached.pos == pos && cached.node(0) == doc) return cached
+    }
+    let result = resolveCache[resolveCachePos] = ResolvedPos.resolve(doc, pos)
+    resolveCachePos = (resolveCachePos + 1) % resolveCacheSize
+    return result
+  }
 }
+
+let resolveCache = [], resolveCachePos = 0, resolveCacheSize = 6

@@ -1,4 +1,3 @@
-import {AssertionError} from "../util/error"
 import {Slice, Fragment} from "../model"
 
 import {Transform} from "./transform"
@@ -43,6 +42,8 @@ Step.define("ancestor", {
     let inner = $from.parent, slice
     if (types.length) {
       let lastWrapper = types[types.length - 1]
+      if (!lastWrapper.contains)
+        throw new RangeError("Can not wrap content in node type " + lastWrapper.name)
       let content = inner.content.cut($from.parentOffset, $to.parentOffset)
       if (!lastWrapper.checkContent(content, attrs[types.length - 1]))
         return StepResult.fail("Content can not be wrapped in ancestor " + lastWrapper.name)
@@ -95,7 +96,7 @@ export function canLift(doc, from, to) {
 function rangeDepth(from, to) {
   let shared = from.sameDepth(to)
   if (from.node(shared).isTextblock) --shared
-  if (from.before(shared) >= to.after(shared)) return null
+  if (shared && from.before(shared) >= to.after(shared)) return null
   return shared
 }
 
@@ -115,15 +116,16 @@ function findLiftable(from, to) {
   }
 }
 
-// :: (number, ?number) → Transform
+// :: (number, ?number, ?bool) → Transform
 // Lift the nearest liftable ancestor of the [sibling
-// range](#Node.siblingRange) of the given positions out of its
-// parent (or do nothing if no such node exists).
+// range](#Node.siblingRange) of the given positions out of its parent
+// (or do nothing if no such node exists). When `silent` is true, this
+// won't raise an error when the lift is impossible.
 Transform.prototype.lift = function(from, to = from, silent = false) {
   let $from = this.doc.resolve(from), $to = this.doc.resolve(to)
   let liftable = findLiftable($from, $to)
   if (!liftable) {
-    if (!silent) throw new AssertionError("No valid lift target")
+    if (!silent) throw new RangeError("No valid lift target")
     return this
   }
 
@@ -182,7 +184,7 @@ function checkWrap($from, $to, type) {
 Transform.prototype.wrap = function(from, to = from, type, wrapAttrs) {
   let $from = this.doc.resolve(from), $to = this.doc.resolve(to)
   let check = checkWrap($from, $to, type)
-  if (!check) throw new AssertionError("Wrap not possible")
+  if (!check) throw new RangeError("Wrap not possible")
   let {shared, around, inside} = check
 
   let types = around.concat(type).concat(inside)
@@ -204,6 +206,7 @@ Transform.prototype.wrap = function(from, to = from, type, wrapAttrs) {
 // Set the type of all textblocks (partly) between `from` and `to` to
 // the given node type with the given attributes.
 Transform.prototype.setBlockType = function(from, to = from, type, attrs) {
+  if (!type.isTextblock) throw new RangeError("Type given to setBlockType should be a textblock")
   this.doc.nodesBetween(from, to, (node, pos) => {
     if (node.isTextblock && !node.hasMarkup(type, attrs)) {
       // Ensure all markup that isn't allowed in the new node type is cleared
@@ -221,7 +224,7 @@ Transform.prototype.setBlockType = function(from, to = from, type, attrs) {
 // Change the type and attributes of the node after `pos`.
 Transform.prototype.setNodeType = function(pos, type, attrs) {
   let node = this.doc.nodeAt(pos)
-  if (!node) throw new AssertionError("No node at given position")
+  if (!node) throw new RangeError("No node at given position")
   if (!type) type = node.type
   if (node.type.contains)
     return this.step("ancestor", pos + 1, pos + 1 + node.content.size, {depth: 1, types: [type], attrs: [attrs]})

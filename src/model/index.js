@@ -11,13 +11,13 @@
 // This module does not depend on the browser API being available
 // (i.e. you can load it into any JavaScript environment).
 
-export {Node, PosContext} from "./node"
+export {Node} from "./node"
 export {ResolvedPos} from "./resolvedpos"
 export {Fragment} from "./fragment"
 export {Slice, ReplaceError} from "./replace"
 export {Mark} from "./mark"
 
-export {SchemaSpec, Schema, SchemaError,
+export {SchemaSpec, Schema,
         NodeType, Block, Textblock, Inline, Text,
         MarkType, Attribute, NodeKind} from "./schema"
 export {defaultSchema, Doc, BlockQuote, OrderedList, BulletList, ListItem,
@@ -25,5 +25,3 @@ export {defaultSchema, Doc, BlockQuote, OrderedList, BulletList, ListItem,
         CodeMark, EmMark, StrongMark, LinkMark} from "./defaultschema"
 
 export {findDiffStart, findDiffEnd} from "./diff"
-
-export {ModelError} from "./error"

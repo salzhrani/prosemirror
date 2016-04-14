@@ -1,4 +1,3 @@
-import {NamespaceError} from "../util/error"
 import {ReplaceError} from "../model"
 
 import {PosMap} from "./map"
@@ -12,7 +11,7 @@ export class Step {
   // type, and the shape of the positions and parameter should be
   // appropriate for that type.
   constructor(type, from, to, param = null) {
-    if (!(type in steps)) throw new NamespaceError("Unknown step type: " + type)
+    if (!(type in steps)) throw new RangeError("Unknown step type: " + type)
     // :: string
     // The type of the step.
     this.type = type
@@ -57,8 +56,8 @@ export class Step {
   // version of that step with its positions adjusted, or `null` if
   // the step was entirely deleted by the mapping.
   map(remapping) {
-    let from = remapping.map(this.from, 1)
-    let to = this.to == this.from ? from : remapping.map(this.to, -1)
+    let from = remapping.mapResult(this.from, 1)
+    let to = this.to == this.from ? from : remapping.mapResult(this.to, -1)
     if (from.deleted && to.deleted) return null
     return new Step(this.type, from.pos, Math.max(from.pos, to.pos), this.param)
   }
@@ -100,6 +99,10 @@ export class Step {
   //   : Deserialize this step type's parameter from JSON.
   static define(type, implementation) {
     steps[type] = implementation
+  }
+
+  toString() {
+    return this.type + "@" + this.from + "-" + this.to
   }
 }
 
