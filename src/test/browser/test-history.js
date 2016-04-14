@@ -1,10 +1,10 @@
-import {namespace} from "./def"
-import {doc, p} from "../build"
+import {namespace, dispatch} from "./def"
+import {doc, p, ul, li} from "../build"
 import {is, cmp, cmpStr, cmpNode} from "../cmp"
 
 const test = namespace("history")
 
-function type(pm, text) { pm.tr.insertText(pm.selection.head, text).apply() }
+function type(pm, text) { pm.tr.replaceSelection(pm.schema.text(text)).apply() }
 
 function cutHistory(pm) { pm.history.lastAddedAt = 0 }
 
@@ -50,7 +50,7 @@ test("unsynced", pm => {
   cmpNode(pm.doc, doc(p("oops!")))
 })
 
-test("unsynced_complex", pm => {
+function unsyncedComplex(pm, compress) {
   type(pm, "hello")
   cutHistory(pm)
   type(pm, "!")
@@ -58,11 +58,16 @@ test("unsynced_complex", pm => {
   pm.tr.split(3).apply()
   cmpNode(pm.doc, doc(p(".."), p("..hello!")))
   pm.tr.split(2).apply({addToHistory: false})
+  if (compress) pm.history.done.compress(Infinity)
   pm.execCommand("undo")
   cmpNode(pm.doc, doc(p("."), p("...hello")))
   pm.execCommand("undo")
   cmpNode(pm.doc, doc(p("."), p("...")))
-})
+}
+
+test("unsynced_complex", pm => unsyncedComplex(pm, false))
+
+test("unsynced_complex_compress", pm => unsyncedComplex(pm, true))
 
 test("overlapping", pm => {
   type(pm, "hello")
@@ -136,30 +141,14 @@ test("ping_pong_unsynced", pm => {
   type(pm, "top")
   pm.tr.insertText(1, "yyy").apply({addToHistory: false})
   pm.tr.insertText(7, "zzz").apply({addToHistory: false})
-  for (let i = 0; i < 6; i++) {
-    let re = i % 2
-    for (let j = 0; j < 4; j++)
-      cmp(pm.history[re ? "redo" : "undo"](), j < 3)
-    cmpNode(pm.doc, re ? doc(p("yyytopzzz"), p("zero one twoxxx three")) : doc(p("yyyzzzxxx")), String(i))
+  for (let i = 0; i < 3; i++) {
+    if (i == 2) pm.history.done.compress(Infinity)
+    for (let j = 0; j < 4; j++) cmp(pm.history.undo(), j < 3)
+    cmpNode(pm.doc, doc(p("yyyzzzxxx")), i + " undo")
+    if (i == 2) pm.history.undone.compress(Infinity)
+    for (let j = 0; j < 4; j++) cmp(pm.history.redo(), j < 3)
+    cmpNode(pm.doc, doc(p("yyytopzzz"), p("zero one twoxxx three")), i + " redo")
   }
-})
-
-test("compressable", pm => {
-  type(pm, "XY")
-  pm.setTextSelection(2)
-  cutHistory(pm)
-  type(pm, "one")
-  type(pm, "two")
-  type(pm, "three")
-  pm.tr.insertText(14, "!").apply({addToHistory: false})
-  pm.history.done.startCompression(pm.doc)
-  cmpNode(pm.doc, doc(p("XonetwothreeY!")))
-  pm.execCommand("undo")
-  cmpNode(pm.doc, doc(p("XY!")))
-  cmpStr(pm.selection.anchor, 2)
-  pm.execCommand("redo")
-  cmpNode(pm.doc, doc(p("XonetwothreeY!")))
-  cmpStr(pm.selection.anchor, 13)
 })
 
 test("setDocResets", pm => {
@@ -197,6 +186,13 @@ test("rollback", pm => {
   is(!pm.history.backToVersion(version), "failed rollback")
 })
 
+test("rollback_to_start", pm => {
+  let version = pm.history.getVersion()
+  type(pm, "def")
+  pm.history.backToVersion(version)
+  cmpNode(pm.doc, doc(p("abc")))
+}, {doc: doc(p("abc"))})
+
 test("setSelectionOnUndo", pm => {
   type(pm, "hi")
   cutHistory(pm)
@@ -210,7 +206,6 @@ test("setSelectionOnUndo", pm => {
   is(pm.selection.eq(selection2), "failed restoring selection after redo")
 })
 
-
 test("rebaseSelectionOnUndo", pm => {
   type(pm, "hi")
   cutHistory(pm)
@@ -220,3 +215,57 @@ test("rebaseSelectionOnUndo", pm => {
   pm.execCommand("undo")
   cmpStr(pm.selection.head, 6)
 })
+
+test("unsynced_overwrite", pm => {
+  pm.history.preserveItems++
+  type(pm, "a")
+  type(pm, "b")
+  cutHistory(pm)
+  pm.setTextSelection(1, 3)
+  type(pm, "c")
+  pm.history.undo()
+  pm.history.undo()
+  cmpNode(pm.doc, doc(p()))
+})
+
+test("unsynced_list_manip", pm => {
+  pm.history.preserveItems++
+  dispatch(pm, "Enter")
+  pm.execCommand("list_item:sink")
+  type(pm, "abc")
+  cutHistory(pm)
+  dispatch(pm, "Enter")
+  dispatch(pm, "Enter")
+  cmpNode(pm.doc, doc(ul(li(p("hello"), ul(li(p("abc"))), p()))))
+  pm.history.undo()
+  cmpNode(pm.doc, doc(ul(li(p("hello"), ul(li(p("abc")))))))
+  pm.history.undo()
+  cmpNode(pm.doc, doc(ul(li(p("hello")))))
+}, {doc: doc(ul(li(p("hello<a>"))))})
+
+test("unsynced_list_indent", pm => {
+  pm.history.preserveItems++
+  dispatch(pm, "Enter")
+  pm.execCommand("list_item:sink")
+  type(pm, "abc")
+  cutHistory(pm)
+  dispatch(pm, "Enter")
+  pm.execCommand("list_item:sink")
+  type(pm, "def")
+  cutHistory(pm)
+  pm.setTextSelection(12)
+  pm.execCommand("list_item:lift")
+  cmpNode(pm.doc, doc(ul(li(p("hello")), li(p("abc"), ul(li(p("def")))))))
+  pm.history.undo()
+  cmpNode(pm.doc, doc(ul(li(p("hello"), ul(li(p("abc"), ul(li(p("def")))))))))
+  pm.history.undo()
+  cmpNode(pm.doc, doc(ul(li(p("hello"), ul(li(p("abc")))))))
+  pm.history.undo()
+  cmpNode(pm.doc, doc(ul(li(p("hello")))))
+  pm.history.redo()
+  cmpNode(pm.doc, doc(ul(li(p("hello"), ul(li(p("abc")))))))
+  pm.history.redo()
+  cmpNode(pm.doc, doc(ul(li(p("hello"), ul(li(p("abc"), ul(li(p("def")))))))))
+  pm.history.redo()
+  cmpNode(pm.doc, doc(ul(li(p("hello")), li(p("abc"), ul(li(p("def")))))))
+}, {doc: doc(ul(li(p("hello<a>"))))})

@@ -1,4 +1,3 @@
-import {AssertionError} from "../util/error"
 import {Slice} from "../model"
 
 import {Transform} from "./transform"
@@ -48,7 +47,7 @@ function canJoin(a, b) {
 // point, if any.
 export function joinPoint(doc, pos, dir = -1) {
   let $pos = doc.resolve(pos)
-  for (let d = $pos.depth; d >= 0; d--) {
+  for (let d = $pos.depth;; d--) {
     let before, after
     if (d == $pos.depth) {
       before = $pos.nodeBefore
@@ -61,6 +60,7 @@ export function joinPoint(doc, pos, dir = -1) {
       after = $pos.node(d + 1)
     }
     if (before && !before.isTextblock && canJoin(before, after)) return pos
+    if (d == 0) break
     pos = dir < 0 ? $pos.before(d) : $pos.after(d)
   }
 }
@@ -74,7 +74,7 @@ Transform.prototype.join = function(pos, depth = 1, silent = false) {
     let $pos = this.doc.resolve(pos)
     if ($pos.parentOffset == 0 || $pos.parentOffset == $pos.parent.content.size ||
         !$pos.nodeBefore.type.canContainContent($pos.nodeAfter.type)) {
-      if (!silent) throw new AssertionError("Nothing to join at " + pos)
+      if (!silent) throw new RangeError("Nothing to join at " + pos)
       break
     }
     this.step("join", pos - 1, pos + 1)

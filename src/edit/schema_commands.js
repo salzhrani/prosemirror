@@ -246,7 +246,8 @@ HardBreak.register("command", "insert", {
     else
       return pm.tr.replaceSelection(this.create()).apply(pm.apply.scroll)
   },
-  keys: ["Mod-Enter", "Shift-Enter"]
+  keys: {all: ["Mod-Enter", "Shift-Enter"],
+         mac: ["Ctrl-Enter"]}
 })
 
 // ;; #path=list_item:split #kind=command
@@ -283,6 +284,10 @@ function selectedListItems(pm, type) {
           depth: itemDepth}
 }
 
+// ;; #path="list_item:lift" #kind=command
+// Lift a list item into a parent list.
+//
+// **Keybindings:** Mod-[
 ListItem.register("command", "lift", {
   label: "Lift the selected list items to an outer list",
   run(pm) {
@@ -292,14 +297,18 @@ ListItem.register("command", "lift", {
     if ($to.node(selected.depth - 2).type != this) return false
     let itemsAfter = selected.to < $to.end(selected.depth - 1)
     let tr = pm.tr.splitIfNeeded(selected.to, 2).splitIfNeeded(selected.from, 2)
-    let end = tr.map(selected.to, -1).pos
-    tr.step("ancestor", tr.map(selected.from).pos, end, {depth: 2})
+    let end = tr.map(selected.to, -1)
+    tr.step("ancestor", tr.map(selected.from), end, {depth: 2})
     if (itemsAfter) tr.join(end - 2)
     return tr.apply(pm.apply.scroll)
   },
   keys: ["Mod-[(20)"]
 })
 
+// ;; #path="list_item:sink" #kind=command
+// Move a list item into a sublist.
+//
+// **Keybindings:** Mod-]
 ListItem.register("command", "sink", {
   label: "Sink the selected list items into an inner list",
   run(pm) {
@@ -317,7 +326,7 @@ ListItem.register("command", "sink", {
 })
 
 for (let i = 1; i <= 10; i++)
-  // ;; #path=:heading::make_ #kind=command
+  // ;; #path="heading:make_" #kind=command
   // The commands `make1` to `make6` set the textblocks in the
   // selection to become headers with the given level.
   //

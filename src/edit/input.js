@@ -5,8 +5,8 @@ import {parseFrom, fromDOM, toHTML, toText} from "../format"
 import {captureKeys} from "./capturekeys"
 import {elt, browser, contains} from "../dom"
 
-import {readDOMChange, textContext, textInContext} from "./domchange"
-import {TextSelection, rangeFromDOMLoose, findSelectionAtStart, findSelectionAtEnd, findSelectionNear, hasFocus} from "./selection"
+import {readInputChange, readCompositionChange} from "./domchange"
+import {TextSelection, findSelectionAtStart, findSelectionAtEnd, findSelectionNear, hasFocus} from "./selection"
 import {posBeforeFromDOM, handleNodeClick, selectableNodeAbove} from "./dompos"
 
 let stopSeq = null
@@ -22,14 +22,11 @@ export class Input {
 
     this.keySeq = null
 
-    // When the user is creating a composed character,
-    // this is set to a Composing instance.
-    this.composing = null
     this.mouseDown = null
     this.dragging = null
     this.dropTarget = null
-    this.shiftKey = this.updatingComposition = false
-    this.skipInput = 0
+    this.shiftKey = false
+    this.finishComposing = null
 
     this.keymaps = []
     this.defaultKeymap = null
@@ -54,75 +51,94 @@ export class Input {
     this.pm.off("selectionChange", this._selectionChangeHandler)
   }
 
-  maybeAbortComposition() {
-    if (this.composing && !this.updatingComposition) {
-      if (this.composing.finished) {
-        finishComposing(this.pm)
-      } else { // Toggle selection to force end of composition
-        this.composing = null
-        this.skipInput++
-        let sel = window.getSelection()
-        if (sel.rangeCount) {
-          let range = sel.getRangeAt(0)
-          sel.removeAllRanges()
-          sel.addRange(range)
-        }
+  // Dispatch a key press to the internal keymaps, which will override the default
+  // DOM behavior.
+  dispatchKey(name, e) {
+    let pm = this.pm, seq = pm.input.keySeq
+    // If the previous key should be used in sequence with this one, modify the name accordingly.
+    if (seq) {
+      if (Keymap.isModifierKey(name)) return true
+      clearTimeout(stopSeq)
+      stopSeq = setTimeout(function() {
+        if (pm.input.keySeq == seq)
+          pm.input.keySeq = null
+      }, 50)
+      name = seq + " " + name
+    }
+
+    let handle = function(bound) {
+      if (bound === false) return "nothing"
+      if (bound == "...") return "multi"
+      if (bound == null) return false
+
+      let result = false
+      if (Array.isArray(bound)) {
+        for (let i = 0; result === false && i < bound.length; i++)
+          result = handle(bound[i])
+      } else if (typeof bound == "string") {
+        result = pm.execCommand(bound)
+      } else {
+        result = bound(pm)
       }
+      return result == false ? false : "handled"
+    }
+
+    let result
+    for (let i = 0; !result && i < pm.input.keymaps.length; i++)
+      result = handle(pm.input.keymaps[i].map.lookup(name, pm))
+    if (!result)
+      result = handle(pm.input.baseKeymap.lookup(name, pm)) || handle(captureKeys.lookup(name))
+
+    // If the key should be used in sequence with the next key, store the keyname internally.
+    if (result == "multi")
+      pm.input.keySeq = name
+
+    if ((result == "handled" || result == "multi") && e)
+      e.preventDefault()
+
+    if (seq && !result && /\'$/.test(name)) {
+      if (e) e.preventDefault()
       return true
     }
-  }
-}
-
-// Dispatch a key press to the internal keymaps, which will override the default
-// DOM behavior.
-export function dispatchKey(pm, name, e) {
-  let seq = pm.input.keySeq
-  // If the previous key should be used in sequence with this one, modify the name accordingly.
-  if (seq) {
-    if (Keymap.isModifierKey(name)) return true
-    clearTimeout(stopSeq)
-    stopSeq = setTimeout(function() {
-      if (pm.input.keySeq == seq)
-        pm.input.keySeq = null
-    }, 50)
-    name = seq + " " + name
+    return !!result
   }
 
-  let handle = function(bound) {
-    if (bound === false) return "nothing"
-    if (bound == "...") return "multi"
-    if (bound == null) return false
+  // : (ProseMirror, TextSelection, string)
+  // Insert text into a document.
+  insertText(from, to, text) {
+    if (from == to && !text) return
+    let pm = this.pm, marks = pm.input.storedMarks || pm.doc.marksAt(from)
+    pm.tr.replaceWith(from, to, text ? pm.schema.text(text, marks) : null).apply({
+      scrollIntoView: true,
+      selection: new TextSelection(from + text.length)
+    })
+    // :: () #path=ProseMirror#events#textInput
+    // Fired when the user types text into the editor.
+    if (text) pm.signal("textInput", text)
+  }
 
-    let result = false
-    if (Array.isArray(bound)) {
-      for (let i = 0; result === false && i < bound.length; i++)
-        result = handle(bound[i])
-    } else if (typeof bound == "string") {
-      result = pm.execCommand(bound)
-    } else {
-      result = bound(pm)
+  get composing() {
+    return this.pm.operation && this.pm.operation.composing
+  }
+
+  startComposition(dataLen, realStart) {
+    this.pm.ensureOperation({noFlush: true, readSelection: realStart}).composing = {
+      ended: false,
+      applied: false,
+      margin: dataLen
     }
-    return result == false ? false : "handled"
+    this.pm.unscheduleFlush()
   }
 
-  let result
-  for (let i = 0; !result && i < pm.input.keymaps.length; i++)
-    result = handle(pm.input.keymaps[i].map.lookup(name, pm))
-  if (!result)
-    result = handle(pm.input.baseKeymap.lookup(name, pm)) || handle(captureKeys.lookup(name))
-
-  // If the key should be used in sequence with the next key, store the keyname internally.
-  if (result == "multi")
-    pm.input.keySeq = name
-
-  if (result == "handled" || result == "multi")
-    e.preventDefault()
-
-  if (seq && !result && /\'$/.test(name)) {
-    e.preventDefault()
-    return true
+  applyComposition(andFlush) {
+    let composing = this.composing
+    if (composing.applied) return
+    readCompositionChange(this.pm, composing.margin)
+    composing.applied = true
+    // Operations that read DOM changes must be flushed, to make sure
+    // subsequent DOM changes find a clean DOM.
+    if (andFlush) this.pm.flush()
   }
-  return !!result
 }
 
 handlers.keydown = (pm, e) => {
@@ -136,7 +152,7 @@ handlers.keydown = (pm, e) => {
   if (e.keyCode == 16) pm.input.shiftKey = true
   if (pm.input.composing) return
   let name = Keymap.keyName(e)
-  if (name && dispatchKey(pm, name, e)) return
+  if (name && pm.input.dispatchKey(name, e)) return
   pm.sel.fastPoll()
 }
 
@@ -144,30 +160,16 @@ handlers.keyup = (pm, e) => {
   if (e.keyCode == 16) pm.input.shiftKey = false
 }
 
-// : (ProseMirror, TextSelection, string)
-// Insert text into a document.
-function inputText(pm, range, text) {
-  if (range.empty && !text) return false
-  let marks = pm.input.storedMarks || pm.doc.marksAt(range.from)
-  pm.tr.replaceWith(range.from, range.to, pm.schema.text(text, marks)).apply({
-    scrollIntoView: true,
-    selection: new TextSelection(range.from + text.length)
-  })
-  // :: () #path=ProseMirror#events#textInput
-  // Fired when the user types text into the editor.
-  pm.signal("textInput", text)
-}
-
 handlers.keypress = (pm, e) => {
   if (!hasFocus(pm) || pm.input.composing || !e.charCode ||
       e.ctrlKey && !e.altKey || browser.mac && e.metaKey) return
-  if (dispatchKey(pm, Keymap.keyName(e), e)) return
+  if (pm.input.dispatchKey(Keymap.keyName(e), e)) return
   let sel = pm.selection
   if (sel.node && sel.node.contains == null) {
     pm.tr.delete(sel.from, sel.to).apply()
     sel = pm.selection
   }
-  inputText(pm, sel, String.fromCharCode(e.charCode))
+  pm.input.insertText(sel.from, sel.to, String.fromCharCode(e.charCode))
   e.preventDefault()
 }
 
@@ -292,82 +294,71 @@ handlers.contextmenu = (pm, e) => {
   handleNodeClick(pm, "handleContextMenu", e, realTarget(pm, e), false)
 }
 
-// A class to track state while creating a composed character.
-class Composing {
-  constructor(pm, data) {
-    this.finished = false
-    this.context = textContext(data)
-    this.data = data
-    this.endData = null
-    let range = pm.selection
-    if (data) {
-      let $head = pm.doc.resolve(range.head)
-      let found = $head.parent.textContent.indexOf(data, $head.parentOffset - data.length)
-      if (found > -1 && found <= $head.parentOffset + data.length) {
-        let start = $head.pos - $head.parentOffset
-        range = new TextSelection(start, $head.parent.content.size)
-      }
-    }
-    this.range = range
-  }
-}
+// Input compositions are hard. Mostly because the events fired by
+// browsers are A) very unpredictable and inconsistent, and B) not
+// cancelable.
+//
+// ProseMirror has the problem that it must not update the DOM during
+// a composition, or the browser will cancel it. What it does is keep
+// long-running operations (delayed DOM updates) when a composition is
+// active.
+//
+// We _do not_ trust the information in the composition events which,
+// apart from being very uninformative to begin with, is often just
+// plain wrong. Instead, when a composition ends, we parse the dom
+// around the original selection, and derive an update from that.
 
 handlers.compositionstart = (pm, e) => {
-  if (!hasFocus(pm) || pm.input.maybeAbortComposition()) return
-
-  pm.flush()
-  pm.input.composing = new Composing(pm, e.data)
-  let $head = pm.doc.resolve(pm.selection.head)
-  pm.markRangeDirty($head.before($head.depth), $head.after($head.depth))
+  if (!pm.input.composing && hasFocus(pm))
+    pm.input.startComposition(e.data ? e.data.length : 0, true)
 }
 
-handlers.compositionupdate = (pm, e) => {
-  if (!hasFocus(pm)) return
-  let info = pm.input.composing
-  if (info && info.data != e.data) {
-    info.data = e.data
-    pm.input.updatingComposition = true
-    inputText(pm, info.range, info.data)
-    pm.input.updatingComposition = false
-    info.range = new TextSelection(info.range.from, info.range.from + info.data.length)
-  }
+handlers.compositionupdate = pm => {
+  if (!pm.input.composing && hasFocus(pm))
+    pm.input.startComposition(0, false)
 }
 
 handlers.compositionend = (pm, e) => {
   if (!hasFocus(pm)) return
-  let info = pm.input.composing
-  if (info) {
-    pm.input.composing.finished = true
-    pm.input.composing.endData = e.data
-    setTimeout(() => {if (pm.input.composing == info) finishComposing(pm)}, 20)
-  }
-}
-
-function finishComposing(pm) {
-  let info = pm.input.composing
-  let text = textInContext(info.context, info.endData)
-  let range = rangeFromDOMLoose(pm)
-  pm.ensureOperation()
-  pm.input.composing = null
-  if (text != info.data) inputText(pm, info.range, text)
-  if (range && !range.eq(pm.sel.range)) pm.setSelection(range)
-}
-
-handlers.input = (pm, e) => {
-  if (!hasFocus(pm)) return
-  if (pm.input.skipInput) return --pm.input.skipInput
-
-  if (pm.input.composing) {
-    if (pm.input.composing.finished) finishComposing(pm)
+  let composing = pm.input.composing
+  if (!composing) {
+    // We received a compositionend without having seen any previous
+    // events for the composition. If there's data in the event
+    // object, we assume that it's a real change, and start a
+    // composition. Otherwise, we just ignore it.
+    if (e.data) pm.input.startComposition(e.data.length, false)
+    else return
+  } else if (composing.applied) {
+    // This happens when a flush during composition causes a
+    // syncronous compositionend.
     return
   }
 
-  pm.startOperation({readSelection: false})
-  let change = readDOMChange(pm)
-  if (change && change.key)
-    dispatchKey(pm, change.key, e)
-  else if (change && change.transform)
-    pm.apply(change.transform, pm.apply.scroll)
+  clearTimeout(pm.input.finishComposing)
+  pm.operation.composing.ended = true
+  // Applying the composition right away from this event confuses
+  // Chrome (and probably other browsers), causing them to re-update
+  // the DOM afterwards. So we apply the composition either in the
+  // next input event, or after a short interval.
+  pm.input.finishComposing = window.setTimeout(() => {
+    let composing = pm.input.composing
+    if (composing && composing.ended) pm.input.applyComposition(true)
+  }, 20)
+}
+
+handlers.input = pm => {
+  if (!hasFocus(pm)) return
+  let composing = pm.input.composing
+  if (composing) {
+    // Ignore input events during composition, except when the
+    // composition has ended, in which case we can apply it.
+    if (composing.ended) pm.input.applyComposition(true)
+    return
+  }
+
+  // Read the changed DOM and derive an update from that.
+  readInputChange(pm)
+  pm.flush()
 }
 
 function toClipboard(doc, from, to, dataTransfer) {
@@ -379,6 +370,14 @@ function toClipboard(doc, from, to, dataTransfer) {
   dataTransfer.setData("text/html", html)
   dataTransfer.setData("text/plain", toText(slice.content))
   return slice
+}
+
+let cachedCanUpdateClipboard = null
+
+function canUpdateClipboard(dataTransfer) {
+  if (cachedCanUpdateClipboard != null) return cachedCanUpdateClipboard
+  dataTransfer.setData("text/html", "<hr>")
+  return cachedCanUpdateClipboard = dataTransfer.getData("text/html") == "<hr>"
 }
 
 // :: (text: string) → string #path=ProseMirror#events#transformPastedText
@@ -408,10 +407,10 @@ function fromClipboard(pm, dataTransfer, plainText) {
   } else {
     let dom = document.createElement("div")
     dom.innerHTML = pm.signalPipelined("transformPastedHTML", html)
-    let wrap = dom.querySelector("[pm-context]"), context, contextNode, found
+    let wrap = dom.querySelector("[pm-context]"), context, contextNodeType, found
     if (wrap && (context = /^(\w+) (\d+) (\d+)$/.exec(wrap.getAttribute("pm-context"))) &&
-        (contextNode = pm.schema.nodes[context[1]]) && contextNode.defaultAttrs &&
-        (found = parseFromContext(wrap, contextNode, +context[2], +context[3])))
+        (contextNodeType = pm.schema.nodes[context[1]]) && contextNodeType.defaultAttrs &&
+        (found = parseFromContext(wrap, contextNodeType, +context[2], +context[3])))
       slice = found
     else
       doc = fromDOM(pm.schema, dom)
@@ -421,10 +420,11 @@ function fromClipboard(pm, dataTransfer, plainText) {
   return pm.signalPipelined("transformPasted", slice)
 }
 
-function parseFromContext(dom, contextNode, openLeft, openRight) {
-  let schema = contextNode.schema
-  let parsed = fromDOM(schema, dom, {topNode: contextNode.create(), preserveWhitespace: true})
-  return new Slice(parsed.content, clipOpen(parsed.content, openLeft, true), clipOpen(parsed.content, openRight, false))
+function parseFromContext(dom, contextNodeType, openLeft, openRight) {
+  let schema = contextNodeType.schema, contextNode = contextNodeType.create()
+  let parsed = fromDOM(schema, dom, {topNode: contextNode, preserveWhitespace: true})
+  return new Slice(parsed.content, clipOpen(parsed.content, openLeft, true),
+                   clipOpen(parsed.content, openRight, false), contextNode)
 }
 
 function clipOpen(fragment, max, start) {
@@ -438,7 +438,7 @@ function clipOpen(fragment, max, start) {
 
 handlers.copy = handlers.cut = (pm, e) => {
   let {from, to, empty} = pm.selection
-  if (empty || !e.clipboardData) return
+  if (empty || !e.clipboardData || !canUpdateClipboard(e.clipboardData)) return
   toClipboard(pm.doc, from, to, e.clipboardData)
   e.preventDefault()
   if (e.type == "cut" && !empty)
@@ -553,7 +553,7 @@ handlers.drop = (pm, e) => {
     let tr = pm.tr
     if (dragging && !e.ctrlKey && dragging.from != null) {
       tr.delete(dragging.from, dragging.to)
-      insertPos = tr.map(insertPos).pos
+      insertPos = tr.map(insertPos)
     }
     tr.replace(insertPos, insertPos, slice).apply()
     let found
@@ -563,7 +563,7 @@ handlers.drop = (pm, e) => {
       pm.setNodeSelection(insertPos)
     } else {
       let left = findSelectionNear(pm.doc, insertPos, 1, true).from
-      let right = findSelectionNear(pm.doc, tr.map(start).pos, -1, true).to
+      let right = findSelectionNear(pm.doc, tr.map(start), -1, true).to
       pm.setTextSelection(left, right)
     }
     pm.focus()

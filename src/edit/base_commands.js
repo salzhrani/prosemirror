@@ -1,5 +1,4 @@
 import {joinPoint, joinable, canLift} from "../transform"
-import {AssertionError} from "../util/error"
 
 import {charCategory, isExtendingChar} from "./char"
 import {findSelectionFrom} from "./selection"
@@ -99,7 +98,7 @@ baseCommands.joinBackward = {
 // Get an offset moving backward from a current offset inside a node.
 function moveBackward(doc, pos, by) {
   if (by != "char" && by != "word")
-    throw new AssertionError("Unknown motion unit: " + by)
+    throw new RangeError("Unknown motion unit: " + by)
 
   let $pos = doc.resolve(pos)
   let parent = $pos.parent, offset = $pos.parentOffset
@@ -107,7 +106,7 @@ function moveBackward(doc, pos, by) {
   let cat = null, counted = 0
   for (;;) {
     if (offset == 0) return pos
-    let {offset: start, node} = parent.nodeBefore(offset)
+    let {offset: start, node} = parent.childBefore(offset)
     if (!node) return pos
     if (!node.isText) return cat ? pos : pos - 1
 
@@ -211,7 +210,7 @@ baseCommands.joinForward = {
 
 function moveForward(doc, pos, by) {
   if (by != "char" && by != "word")
-    throw new AssertionError("Unknown motion unit: " + by)
+    throw new RangeError("Unknown motion unit: " + by)
 
   let $pos = doc.resolve(pos)
   let parent = $pos.parent, offset = $pos.parentOffset
@@ -219,7 +218,7 @@ function moveForward(doc, pos, by) {
   let cat = null, counted = 0
   for (;;) {
     if (offset == parent.content.size) return pos
-    let {offset: start, node} = parent.nodeAfter(offset)
+    let {offset: start, node} = parent.childAfter(offset)
     if (!node) return pos
     if (!node.isText) return cat ? pos : pos + 1
 
@@ -411,7 +410,7 @@ baseCommands.liftEmptyBlock = {
     let {head, empty} = pm.selection, $head
     if (!empty || ($head = pm.doc.resolve(head)).parentOffset > 0 || $head.parent.content.size) return false
     if ($head.depth > 1) {
-      if ($head.offset($head.depth - 1) > 0 &&
+      if ($head.index($head.depth - 1) > 0 &&
           $head.index($head.depth - 1) < $head.node($head.depth - 1).childCount - 1 &&
           pm.tr.split($head.before($head.depth)).apply() !== false)
         return

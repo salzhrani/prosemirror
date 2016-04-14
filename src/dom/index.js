@@ -21,15 +21,20 @@ function add(value, target) {
   }
 }
 
-
-const reqFrame = typeof window !== 'undefined' && (window.requestAnimationFrame || window.mozRequestAnimationFrame ||
-      window.webkitRequestAnimationFrame || window.msRequestAnimationFrame).bind(window)
+const reqFrame = typeof window !== 'undefined' && window.requestAnimationFrame || window.mozRequestAnimationFrame ||
+      window.webkitRequestAnimationFrame || window.msRequestAnimationFrame
+const cancelFrame = typeof window !== 'undefined' && window.cancelAnimationFrame || window.mozCancelAnimationFrame ||
+      window.webkitCancelAnimationFrame || window.msCancelAnimationFrame
 
 export function requestAnimationFrame(f) {
-  if (reqFrame) reqFrame(f)
-  else setTimeout(f, 10)
+  if (reqFrame) return reqFrame(f)
+  else return setTimeout(f, 10)
 }
 
+export function cancelAnimationFrame(handle) {
+  if (reqFrame) return cancelFrame(handle)
+  else clearTimeout(handle)
+}
 
 const ie_upto10 = typeof navigator !== 'undefined' && /MSIE \d/.test(navigator.userAgent)
 const ie_11up = typeof navigator !== 'undefined' && /Trident\/(?:[7-9]|\d{2,})\..*rv:(\d+)/.exec(navigator.userAgent)

@@ -1,10 +1,6 @@
-import {ProseMirrorError} from "../util/error"
 import {contains, browser} from "../dom"
 
 import {posFromDOM, DOMAfterPos, DOMFromPos, coordsAtPos} from "./dompos"
-
-// ;; Error type used to signal selection-related problems.
-export class SelectionError extends ProseMirrorError {}
 
 // Track the state of the current editor selection. Keeps the editor
 // selection in sync with the DOM selection by polling for changes,
@@ -86,7 +82,7 @@ export class SelectionState {
   // When the DOM selection changes in a notable manner, modify the
   // current selection state to match.
   readFromDOM() {
-    if (this.pm.input.composing || !hasFocus(this.pm) || !this.domChanged()) return false
+    if (!hasFocus(this.pm) || !this.domChanged()) return false
 
     let sel = window.getSelection(), doc = this.pm.doc
     let anchor = posFromDOM(this.pm, sel.anchorNode, sel.anchorOffset)
@@ -234,11 +230,25 @@ export class TextSelection extends Selection {
   }
 
   map(doc, mapping) {
-    let head = mapping.map(this.head).pos
+    let head = mapping.map(this.head)
     if (!doc.resolve(head).parent.isTextblock)
       return findSelectionNear(doc, head)
-    let anchor = mapping.map(this.anchor).pos
+    let anchor = mapping.map(this.anchor)
     return new TextSelection(doc.resolve(anchor).parent.isTextblock ? anchor : head, head)
+  }
+
+  get token() {
+    return new SelectionToken(TextSelection, this.anchor, this.head)
+  }
+
+  static mapToken(token, mapping) {
+    return new SelectionToken(TextSelection, mapping.map(token.a), mapping.map(token.b))
+  }
+
+  static fromToken(token, doc) {
+    if (!doc.resolve(token.b).parent.isTextblock)
+      return findSelectionNear(doc, token.b)
+    return new TextSelection(doc.resolve(token.a).parent.isTextblock ? token.a : token.b, token.b)
   }
 }
 
@@ -266,20 +276,36 @@ export class NodeSelection extends Selection {
   }
 
   map(doc, mapping) {
-    let from = mapping.map(this.from, 1).pos
-    let to = mapping.map(this.to, -1).pos
+    let from = mapping.map(this.from, 1)
+    let to = mapping.map(this.to, -1)
     let node = doc.nodeAt(from)
     if (node && to == from + node.nodeSize && node.type.selectable)
       return new NodeSelection(from, to, node)
     return findSelectionNear(doc, from)
   }
+
+  get token() {
+    return new SelectionToken(NodeSelection, this.from, this.to)
+  }
+
+  static mapToken(token, mapping) {
+    return new SelectionToken(TextSelection, mapping.map(token.a, 1), mapping.map(token.b, -1))
+  }
+
+  static fromToken(token, doc) {
+    let node = doc.nodeAt(token.a)
+    if (node && token.b == token.a + node.nodeSize && node.type.selectable)
+      return new NodeSelection(token.a, token.b, node)
+    return findSelectionNear(doc, token.a)
+  }
 }
 
-export function rangeFromDOMLoose(pm) {
-  if (!hasFocus(pm)) return null
-  let sel = window.getSelection()
-  return new TextSelection(posFromDOM(pm, sel.anchorNode, sel.anchorOffset, true),
-                           posFromDOM(pm, sel.focusNode, sel.focusOffset, true))
+class SelectionToken {
+  constructor(type, a, b) {
+    this.type = type
+    this.a = a
+    this.b = b
+  }
 }
 
 export function hasFocus(pm) {
@@ -328,7 +354,7 @@ export function findSelectionFrom(doc, pos, dir, text) {
 
 export function findSelectionNear(doc, pos, bias = 1, text) {
   let result = findSelectionFrom(doc, pos, bias, text) || findSelectionFrom(doc, pos, -bias, text)
-  if (!result) SelectionError("Searching for selection in invalid document " + doc)
+  if (!result) throw new RangeError("Searching for selection in invalid document " + doc)
   return result
 }
 
