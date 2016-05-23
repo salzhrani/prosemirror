@@ -1,4 +1,6 @@
-import {joinPoint, joinable, canLift} from "../transform"
+import {browser} from "../dom"
+import {joinPoint, joinable, canLift, canSplit, ReplaceAroundStep} from "../transform"
+import {Slice, Fragment} from "../model"
 
 import {charCategory, isExtendingChar} from "./char"
 import {findSelectionFrom} from "./selection"
@@ -27,22 +29,25 @@ baseCommands.deleteSelection = {
 
 function deleteBarrier(pm, cut) {
   let $cut = pm.doc.resolve(cut), before = $cut.nodeBefore, after = $cut.nodeAfter
-  if (before.type.canContainContent(after.type)) {
+  if (joinable(pm.doc, cut)) {
     let tr = pm.tr.join(cut)
-    if (tr.steps.length && before.content.size == 0 && !before.sameMarkup(after))
+    if (tr.steps.length && before.content.size == 0 && !before.sameMarkup(after) &&
+        $cut.parent.canReplace($cut.index() - 1, $cut.index()))
       tr.setNodeType(cut - before.nodeSize, after.type, after.attrs)
     if (tr.apply(pm.apply.scroll) !== false)
       return
   }
 
   let conn
-  if (after.isTextblock && (conn = before.type.findConnection(after.type))) {
-    let tr = pm.tr, end = cut + after.nodeSize
-    tr.step("ancestor", cut, end, {types: [before.type, ...conn],
-                                   attrs: [before.attrs, ...conn.map(() => null)]})
-    tr.join(end + 2 * conn.length + 2, 1, true)
-    tr.join(cut)
-    if (tr.apply(pm.apply.scroll) !== false) return
+  if (after.isTextblock && (conn = before.contentMatchAt($cut.index()).findWrapping(after.type, after.attrs))) {
+    let end = cut + after.nodeSize, wrap = Fragment.empty
+    for (let i = conn.length - 1; i >= 0; i--)
+      wrap = Fragment.from(conn[i].type.create(conn[i].attrs, wrap))
+    wrap = Fragment.from(before.copy(wrap))
+    return pm.tr
+      .step(new ReplaceAroundStep(cut - 1, end, cut, end, new Slice(wrap, 1, 0), conn.length, true))
+      .join(end + 2 * conn.length, 1, true)
+      .apply(pm.apply.scroll)
   }
 
   let selAfter = findSelectionFrom(pm.doc, cut, 1)
@@ -79,14 +84,14 @@ baseCommands.joinBackward = {
 
     // If the node below has no content and the node above is
     // selectable, delete the node below and select the one above.
-    if (before.type.contains == null && before.type.selectable && $head.parent.content.size == 0) {
+    if (before.type.isLeaf && before.type.selectable && $head.parent.content.size == 0) {
       let tr = pm.tr.delete(cut, cut + $head.parent.nodeSize).apply(pm.apply.scroll)
       pm.setNodeSelection(cut - before.nodeSize)
       return tr
     }
 
     // If the node doesn't allow children, delete it
-    if (before.type.contains == null)
+    if (before.type.isLeaf)
       return pm.tr.delete(cut - before.nodeSize, cut).apply(pm.apply.scroll)
 
     // Apply the joining algorithm
@@ -141,6 +146,7 @@ function moveBackward(doc, pos, by) {
 baseCommands.deleteCharBefore = {
   label: "Delete a character before the cursor",
   run(pm) {
+    if (browser.ios) return false
     let {head, empty} = pm.selection
     if (!empty || pm.doc.resolve(head).parentOffset == 0) return false
     let dest = moveBackward(pm.doc, head, "char")
@@ -199,7 +205,7 @@ baseCommands.joinForward = {
     if (!after) return false
 
     // If the node doesn't allow children, delete it
-    if (after.type.contains == null)
+    if (after.type.isLeaf)
       return pm.tr.delete(cut, cut + after.nodeSize).apply(pm.apply.scroll)
 
     // Apply the joining algorithm
@@ -376,7 +382,7 @@ baseCommands.newlineInCode = {
     let {from, to, node} = pm.selection
     if (node) return false
     let $from = pm.doc.resolve(from)
-    if (!$from.parent.type.isCode || to >= $from.end($from.depth)) return false
+    if (!$from.parent.type.isCode || to >= $from.end()) return false
     return pm.tr.typeText("\n").apply(pm.apply.scroll)
   },
   keys: ["Enter(10)"]
@@ -392,8 +398,9 @@ baseCommands.createParagraphNear = {
   run(pm) {
     let {from, to, node} = pm.selection
     if (!node || !node.isBlock) return false
-    let side = pm.doc.resolve(from).parentOffset ? to : from
-    pm.tr.insert(side, pm.schema.defaultTextblockType().create()).apply(pm.apply.scroll)
+    let $from = pm.doc.resolve(from), side = $from.parentOffset ? to : from
+    let type = $from.parent.defaultContentType($from.indexAfter())
+    pm.tr.insert(side, type.create()).apply(pm.apply.scroll)
     pm.setTextSelection(side + 1)
   },
   keys: ["Enter(20)"]
@@ -408,12 +415,10 @@ baseCommands.liftEmptyBlock = {
   label: "Move current block up",
   run(pm) {
     let {head, empty} = pm.selection, $head
-    if (!empty || ($head = pm.doc.resolve(head)).parentOffset > 0 || $head.parent.content.size) return false
-    if ($head.depth > 1) {
-      if ($head.index($head.depth - 1) > 0 &&
-          $head.index($head.depth - 1) < $head.node($head.depth - 1).childCount - 1 &&
-          pm.tr.split($head.before($head.depth)).apply() !== false)
-        return
+    if (!empty || ($head = pm.doc.resolve(head)).parent.content.size) return false
+    if ($head.depth > 1 && $head.after() != $head.end(-1)) {
+      let before = $head.before()
+      if (canSplit(pm.doc, before)) return pm.tr.split(before).apply(pm.apply.scroll)
     }
     return pm.tr.lift(head, head, true).apply(pm.apply.scroll)
   },
@@ -430,15 +435,17 @@ baseCommands.splitBlock = {
   run(pm) {
     let {from, to, node} = pm.selection, $from = pm.doc.resolve(from)
     if (node && node.isBlock) {
-      if (!$from.parentOffset) return false
+      if (!$from.parentOffset || !canSplit(pm.doc, from)) return false
       return pm.tr.split(from).apply(pm.apply.scroll)
     } else {
       let $to = pm.doc.resolve(to), atEnd = $to.parentOffset == $to.parent.content.size
-      let deflt = pm.schema.defaultTextblockType()
-      let type = atEnd ? deflt : null
-      let tr = pm.tr.delete(from, to).split(from, 1, type)
-      if (!atEnd && !$from.parentOffset && $from.parent.type != deflt)
-        tr.setNodeType($from.before($from.depth), deflt)
+      let tr = pm.tr.delete(from, to)
+      let deflt = $from.node(-1).defaultContentType($from.indexAfter(-1)), type = atEnd ? deflt : null
+      if (canSplit(tr.doc, from, 1, type)) {
+        tr.split(from, 1, type)
+        if (!atEnd && !$from.parentOffset && $from.parent.type != deflt)
+          tr.setNodeType($from.before(), deflt)
+      }
       return tr.apply(pm.apply.scroll)
     }
   },
@@ -449,7 +456,7 @@ function nodeAboveSelection(pm) {
   let sel = pm.selection
   if (sel.node) {
     let $from = pm.doc.resolve(sel.from)
-    return !!$from.depth && $from.before($from.depth)
+    return !!$from.depth && $from.before()
   }
   let $head = pm.doc.resolve(sel.head)
   let same = $head.sameDepth(pm.doc.resolve(sel.anchor))

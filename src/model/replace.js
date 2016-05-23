@@ -10,7 +10,7 @@ export class ReplaceError extends ProseMirrorError {}
 // stores not only a fragment, but also the depth up to which nodes on
 // both side are 'open' / cut through.
 export class Slice {
-  // :: (Fragment, number, number)
+  // :: (Fragment, number, number, ?Node)
   constructor(content, openLeft, openRight, possibleParent) {
     // :: Fragment The slice's content nodes.
     this.content = content
@@ -25,6 +25,37 @@ export class Slice {
   // The size this slice would add when inserted into a document.
   get size() {
     return this.content.size - this.openLeft - this.openRight
+  }
+
+  insertAt(pos, fragment) {
+    function insertInto(content, dist, insert) {
+      let {index, offset} = content.findIndex(dist), child = content.maybeChild(index)
+      if (offset == dist || child.isText)
+        return content.cut(0, dist).append(insert).append(content.cut(dist))
+      let inner = insertInto(child.content, dist - offset - 1, insert)
+      if (!inner || (offset + child.nodeSize > dist && !child.type.contentExpr.matches(child.attrs, inner))) return null
+      return content.replaceChild(index, child.copy(inner))
+    }
+    let content = insertInto(this.content, pos + this.openLeft, fragment)
+    return content && new Slice(content, this.openLeft, this.openRight)
+  }
+
+  removeBetween(from, to) {
+    function removeRange(content, from, to) {
+      let {index, offset} = content.findIndex(from), child = content.maybeChild(index)
+      let {index: indexTo, offset: offsetTo} = content.findIndex(to)
+      if (offset == from || child.isText) {
+        if (offsetTo != to && !content.child(indexTo).isText) throw new RangeError("Removing non-flat range")
+        return content.cut(0, from).append(content.cut(to))
+      }
+      if (index != indexTo) throw new RangeError("Removing non-flat range")
+      return content.replaceChild(index, child.copy(removeRange(child.content, from - offset - 1, to - offset - 1)))
+    }
+    return new Slice(removeRange(this.content, from + this.openLeft, to + this.openLeft), this.openLeft, this.openRight)
+  }
+
+  toString() {
+    return this.content + "(" + this.openLeft + "," + this.openRight + ")"
   }
 
   // :: () → ?Object
@@ -70,7 +101,7 @@ function replaceOuter($from, $to, slice, depth) {
 }
 
 function checkJoin(main, sub) {
-  if (!main.type.canContainContent(sub.type))
+  if (!sub.type.compatibleContent(main.type))
     throw new ReplaceError("Cannot join " + sub.type.name + " onto " + main.type.name)
 }
 
@@ -106,7 +137,7 @@ function addRange($start, $end, depth, target) {
 }
 
 function close(node, content) {
-  if (!node.type.checkContent(content, node.attrs))
+  if (!node.type.validContent(content, node.attrs))
     throw new ReplaceError("Invalid content for node " + node.type.name)
   return node.copy(content)
 }
@@ -144,8 +175,6 @@ function replaceTwoWay($from, $to, depth) {
 
 function prepareSliceForReplace(slice, $along) {
   let extra = $along.depth - slice.openLeft, parent = $along.node(extra)
-  if (!parent.type.canContainFragment(slice.content))
-    throw new ReplaceError("Content " + slice.content + " cannot be placed in " + parent.type.name)
   let node = parent.copy(slice.content)
   for (let i = extra - 1; i >= 0; i--)
     node = $along.node(i).copy(Fragment.from(node))

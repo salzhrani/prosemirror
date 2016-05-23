@@ -35,7 +35,7 @@ export class ProseMirror {
     // :: Schema
     // The schema for this editor's document.
     this.schema = opts.schema
-    if (opts.doc == null) opts.doc = this.schema.node("doc", null, [this.schema.node("paragraph")])
+    if (opts.doc == null) opts.doc = this.schema.nodes.doc.create(null, this.schema.nodes.doc.fixContent())
     // :: DOMNode
     // The editable DOM node containing the document.
     this.content = elt("div", {class: "ProseMirror-content", "pm-container": true})
@@ -133,12 +133,13 @@ export class ProseMirror {
     this.setDoc(value)
   }
 
-  // :: (?string) → any
+  // :: (?string, ?Object) → any
   // Get the editor's content in a given format. When `format` is not
   // given, a `Node` is returned. If it is given, it should be an
-  // existing [serialization format](#format).
-  getContent(format) {
-    return format ? serializeTo(this.doc, format) : this.doc
+  // existing [serialization format](#format). Options to the serializer
+  // may be given as a second argument.
+  getContent(format, options) {
+    return format ? serializeTo(this.doc, format, options || {}) : this.doc
   }
 
   setDocInner(doc) {
@@ -260,7 +261,7 @@ export class ProseMirror {
   // Start an operation and schedule a flush so that any effect of
   // the operation shows up in the DOM.
   startOperation(options) {
-    this.operation = new Operation(this)
+    this.operation = new Operation(this, options)
     if (!(options && options.readSelection === false) && this.sel.readFromDOM())
       this.operation.sel = this.sel.range
 
@@ -395,9 +396,10 @@ export class ProseMirror {
   setMark(type, to, attrs) {
     let sel = this.selection
     if (sel.empty) {
-      let marks = this.activeMarks()
+      let marks = this.activeMarks(), $head
       if (to == null) to = !type.isInSet(marks)
-      if (to && !this.doc.resolve(sel.head).parent.type.canContainMark(type)) return
+      if (to && ($head = this.doc.resolve(sel.head)) &&
+          !$head.parent.contentMatchAt($head.index()).allowsMark(type)) return
       this.input.storedMarks = to ? type.create(attrs).addToSet(marks) : type.removeFromSet(marks)
       // :: () #path=ProseMirror#events#activeMarkChange
       // Fired when the set of [active marks](#ProseMirror.activeMarks) changes.
@@ -506,7 +508,7 @@ export class ProseMirror {
       let child = $from.node(depth)
       if (!dirty.has(child)) dirty.set(child, DIRTY_RESCAN)
     }
-    let start = $from.index(same), end = Math.max(start + 1, $to.index(same) + (same == $to.depth ? 0 : 1))
+    let start = $from.index(same), end = $to.index(same) + (same == $to.depth && $to.atNodeBoundary ? 0 : 1)
     let parent = $from.node(same)
     for (let i = start; i < end; i++)
       dirty.set(parent.child(i), DIRTY_REDRAW)
@@ -546,10 +548,10 @@ eventMixin(ProseMirror)
 // whether a focus needs to happen on flush, and whether something
 // needs to be scrolled into view.
 class Operation {
-  constructor(pm) {
+  constructor(pm, options) {
     this.doc = pm.doc
     this.docSet = false
-    this.sel = pm.sel.range
+    this.sel = (options && options.selection) || pm.sel.range
     this.scrollIntoView = false
     this.focus = false
     this.mappings = []

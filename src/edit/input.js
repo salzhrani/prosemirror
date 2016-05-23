@@ -6,7 +6,7 @@ import {captureKeys} from "./capturekeys"
 import {elt, browser, contains} from "../dom"
 
 import {readInputChange, readCompositionChange} from "./domchange"
-import {TextSelection, findSelectionAtStart, findSelectionAtEnd, findSelectionNear, hasFocus} from "./selection"
+import {findSelectionNear, hasFocus} from "./selection"
 import {posBeforeFromDOM, handleNodeClick, selectableNodeAbove} from "./dompos"
 
 let stopSeq = null
@@ -103,14 +103,15 @@ export class Input {
     return !!result
   }
 
-  // : (ProseMirror, TextSelection, string)
+  // : (ProseMirror, TextSelection, string, ?(Node) → Selection)
   // Insert text into a document.
-  insertText(from, to, text) {
+  insertText(from, to, text, findSelection) {
     if (from == to && !text) return
     let pm = this.pm, marks = pm.input.storedMarks || pm.doc.marksAt(from)
-    pm.tr.replaceWith(from, to, text ? pm.schema.text(text, marks) : null).apply({
+    let tr = pm.tr.replaceWith(from, to, text ? pm.schema.text(text, marks) : null)
+    tr.apply({
       scrollIntoView: true,
-      selection: new TextSelection(from + text.length)
+      selection: findSelection && findSelection(tr.doc) || findSelectionNear(tr.doc, tr.map(to), -1, true)
     })
     // :: () #path=ProseMirror#events#textInput
     // Fired when the user types text into the editor.
@@ -165,12 +166,13 @@ handlers.keypress = (pm, e) => {
       e.ctrlKey && !e.altKey || browser.mac && e.metaKey) return
   if (pm.input.dispatchKey(Keymap.keyName(e), e)) return
   let sel = pm.selection
-  if (sel.node && sel.node.contains == null) {
-    pm.tr.delete(sel.from, sel.to).apply()
-    sel = pm.selection
+  // On iOS, let input through, because if we handle it the virtual
+  // keyboard's default case doesn't update (it only does so when the
+  // user types or taps, not on selection updates from JavaScript).
+  if (!browser.ios) {
+    pm.input.insertText(sel.from, sel.to, String.fromCharCode(e.charCode))
+    e.preventDefault()
   }
-  pm.input.insertText(sel.from, sel.to, String.fromCharCode(e.charCode))
-  e.preventDefault()
 }
 
 function realTarget(pm, mouseEvent) {
@@ -187,9 +189,9 @@ function selectClickedNode(pm, e, target) {
   let {node, from} = pm.selection
   if (node) {
     let $pos = pm.doc.resolve(pos), $from = pm.doc.resolve(from)
-    if ($pos.depth >= $from.depth && $pos.before($from.depth) == from) {
+    if ($pos.depth >= $from.depth && $pos.before() == from) {
       if ($from.depth == 0) return pm.sel.fastPoll()
-      pos = $pos.before($pos.depth)
+      pos = $pos.before()
     }
   }
 
@@ -208,7 +210,7 @@ function handleTripleClick(pm, e, target) {
     if (node.isBlock && !node.isTextblock) // Non-textblock block, select it
       pm.setNodeSelection(pos)
     else if (node.isInline) // Inline node, select whole parent
-      pm.setTextSelection($pos.start($pos.depth), $pos.end($pos.depth))
+      pm.setTextSelection($pos.start(), $pos.end())
     else // Textblock, select content
       pm.setTextSelection(pos + 1, pos + 1 + node.content.size)
     pm.focus()
@@ -346,19 +348,29 @@ handlers.compositionend = (pm, e) => {
   }, 20)
 }
 
-handlers.input = pm => {
-  if (!hasFocus(pm)) return
+function readInput(pm) {
   let composing = pm.input.composing
   if (composing) {
     // Ignore input events during composition, except when the
     // composition has ended, in which case we can apply it.
     if (composing.ended) pm.input.applyComposition(true)
-    return
+    return true
   }
 
   // Read the changed DOM and derive an update from that.
-  readInputChange(pm)
+  let result = readInputChange(pm)
   pm.flush()
+  return result
+}
+
+function readInputSoon(pm) {
+  window.setTimeout(() => {
+    if (!readInput(pm)) window.setTimeout(() => readInput(pm), 80)
+  }, 20)
+}
+
+handlers.input = pm => {
+  if (hasFocus(pm)) readInput(pm)
 }
 
 function toClipboard(doc, from, to, dataTransfer) {
@@ -401,9 +413,10 @@ function fromClipboard(pm, dataTransfer, plainText) {
   let txt = dataTransfer.getData("text/plain")
   let html = dataTransfer.getData("text/html")
   if (!html && !txt) return null
-  let doc, slice
+  let fragment, slice
   if ((plainText || !html) && txt) {
-    doc = parseFrom(pm.schema, pm.signalPipelined("transformPastedText", txt), "text")
+    // FIXME provide way not to wrap this in a whole doc / redo text parsing
+    fragment = parseFrom(pm.schema, pm.signalPipelined("transformPastedText", txt), "text").content
   } else {
     let dom = document.createElement("div")
     dom.innerHTML = pm.signalPipelined("transformPastedHTML", html)
@@ -413,10 +426,16 @@ function fromClipboard(pm, dataTransfer, plainText) {
         (found = parseFromContext(wrap, contextNodeType, +context[2], +context[3])))
       slice = found
     else
-      doc = fromDOM(pm.schema, dom)
+      fragment = fromDOM(pm.schema, dom, {topNode: false})
   }
-  if (!slice)
-    slice = doc.slice(findSelectionAtStart(doc).from, findSelectionAtEnd(doc).to)
+  if (!slice) {
+    let openLeft = 0, openRight = 0
+    if (fragment.size) {
+      if (fragment.firstChild.isTextblock) openLeft = 1
+      if (fragment.lastChild.isTextblock) openRight = 1
+    }
+    slice = new Slice(fragment, openLeft, openRight)
+  }
   return pm.signalPipelined("transformPasted", slice)
 }
 
@@ -430,29 +449,36 @@ function parseFromContext(dom, contextNodeType, openLeft, openRight) {
 function clipOpen(fragment, max, start) {
   for (let i = 0; i < max; i++) {
     let node = start ? fragment.firstChild : fragment.lastChild
-    if (!node || node.type.contains == null) return i
+    if (!node || node.type.isLeaf) return i
     fragment = node.content
   }
   return max
 }
 
 handlers.copy = handlers.cut = (pm, e) => {
-  let {from, to, empty} = pm.selection
-  if (empty || !e.clipboardData || !canUpdateClipboard(e.clipboardData)) return
+  let {from, to, empty} = pm.selection, cut = e.type == "cut"
+  if (empty) return
+  if (!e.clipboardData || !canUpdateClipboard(e.clipboardData)) {
+    if (cut && browser.ie && browser.ie_version <= 11) readInputSoon(pm)
+    return
+  }
   toClipboard(pm.doc, from, to, e.clipboardData)
   e.preventDefault()
-  if (e.type == "cut" && !empty)
-    pm.tr.delete(from, to).apply()
+  if (cut) pm.tr.delete(from, to).apply()
 }
 
 handlers.paste = (pm, e) => {
   if (!hasFocus(pm)) return
-  if (!e.clipboardData) return
+  if (!e.clipboardData) {
+    if (browser.ie && browser.ie_version <= 11) readInputSoon(pm)
+    return
+  }
   let sel = pm.selection
   let slice = fromClipboard(pm, e.clipboardData, pm.input.shiftKey)
   if (slice) {
     e.preventDefault()
-    pm.tr.replace(sel.from, sel.to, slice).apply(pm.apply.scroll)
+    let tr = pm.tr.replace(sel.from, sel.to, slice)
+    tr.apply({scrollIntoView: true, selection: findSelectionNear(tr.doc, tr.map(sel.to))})
   }
 }
 
@@ -467,13 +493,12 @@ class Dragging {
 function dropPos(pm, e, slice) {
   let pos = pm.posAtCoords({left: e.clientX, top: e.clientY})
   if (pos == null || !slice || !slice.content.size) return pos
-  let $pos = pm.doc.resolve(pos), kind = slice.content.leastSuperKind()
+  let $pos = pm.doc.resolve(pos)
   for (let d = $pos.depth; d >= 0; d--) {
-    if (kind.isSubKind($pos.node(d).type.contains)) {
-      if (d == $pos.depth) return pos
-      if (pos <= ($pos.start(d + 1) + $pos.end(d + 1)) / 2) return $pos.before(d + 1)
-      return $pos.after(d + 1)
-    }
+    let bias = d == $pos.depth ? 0 : pos <= ($pos.start(d + 1) + $pos.end(d + 1)) / 2 ? -1 : 1
+    let insertPos = $pos.index(d) + (bias > 0 ? 1 : 0)
+    if ($pos.node(d).canReplace(insertPos, insertPos, slice.content))
+      return bias == 0 ? pos : bias < 0 ? $pos.before(d + 1) : $pos.after(d + 1)
   }
   return pos
 }
@@ -508,7 +533,10 @@ handlers.dragstart = (pm, e) => {
   }
 }
 
-handlers.dragend = pm => window.setTimeout(() => pm.input.dragging = null, 50)
+handlers.dragend = pm => {
+  removeDropTarget(pm)
+  window.setTimeout(() => pm.input.dragging = null, 50)
+}
 
 handlers.dragover = handlers.dragenter = (pm, e) => {
   e.preventDefault()

@@ -1,8 +1,9 @@
 import {BlockQuote, OrderedList, BulletList, ListItem,
         HorizontalRule, Paragraph, Heading, CodeBlock, Image, HardBreak,
-        EmMark, StrongMark, LinkMark, CodeMark, Node, Fragment} from "../model"
+        EmMark, StrongMark, LinkMark, CodeMark, Fragment} from "../model"
 import sortedInsert from "../util/sortedinsert"
 import {defineSource} from "./register"
+import {compareDeep} from "../util/comparedeep"
 
 // :: (Schema, DOMNode, ?Object) → Node
 // Parse document from the content of a DOM node. To pass an explicit
@@ -11,13 +12,13 @@ import {defineSource} from "./register"
 // the `document` property of `options`.
 export function fromDOM(schema, dom, options) {
   if (!options) options = {}
-  let context = new DOMParseState(schema, options.topNode || schema.node("doc"), options)
+  let top = options.topNode
+  let context = new DOMParseState(schema, top === false ? null : top || schema.node("doc"), options)
   let start = options.from ? dom.childNodes[options.from] : dom.firstChild
   let end = options.to != null && dom.childNodes[options.to] || null
   context.addAll(start, end, true)
-  let doc
-  do { doc = context.leave() } while (context.stack.length)
-  return doc
+  while (context.stack.length > 1) context.leave()
+  return context.leave()
 }
 
 // ;; #path=DOMParseSpec #kind=interface
@@ -56,6 +57,41 @@ export function fromDOM(schema, dom, options) {
 
 defineSource("dom", fromDOM)
 
+class NodeBuilder {
+  constructor(type, attrs) {
+    this.type = type
+    this.pos = type.contentExpr.start(attrs)
+    this.content = []
+  }
+
+  get isTextblock() { return this.type.isTextblock }
+
+  add(node) {
+    let matched = this.pos.matchNode(node)
+    if (!matched && node.marks.length) {
+      node = node.mark(node.marks.filter(mark => this.pos.allowsMark(mark.type)))
+      matched = this.pos.matchNode(node)
+    }
+    if (!matched) return false
+    this.content.push(node)
+    this.pos = matched
+    return true
+  }
+
+  finish() {
+    let fill = this.pos.fillBefore(Fragment.empty, true)
+    if (!fill) return null
+    return this.type.create(this.pos.attrs, Fragment.from(this.content).append(fill))
+  }
+}
+
+class FragmentBuilder {
+  constructor() { this.content = [] }
+  get isTextblock() { return false }
+  add(node) { this.content.push(node); return true }
+  finish() { return Fragment.fromArray(this.content) }
+}
+
 // :: (Schema, string, ?Object) → Node
 // Parses the HTML into a DOM, and then calls through to `fromDOM`.
 export function fromHTML(schema, html, options) {
@@ -93,7 +129,10 @@ class DOMParseState {
     this.stack = []
     this.marks = noMarks
     this.closing = false
-    this.enter(topNode.type, topNode.attrs)
+    if (topNode)
+      this.enter(topNode.type, topNode.attrs)
+    else
+      this.enterPseudo()
     let info = schemaInfo(schema)
     this.tagInfo = info.tags
     this.styleInfo = info.styles
@@ -107,7 +146,7 @@ class DOMParseState {
     if (dom.nodeType == 3) {
       let value = dom.nodeValue
       let top = this.top, last
-      if (/\S/.test(value) || top.type.isTextblock) {
+      if (/\S/.test(value) || top.isTextblock) {
         if (!this.options.preserveWhitespace) {
           value = value.replace(/\s+/g, " ")
           // If this starts with whitespace, and there is either no node
@@ -135,7 +174,7 @@ class DOMParseState {
     if (this.options.editableContent && name == "br" && !dom.nextSibling) return
     if (!this.parseNodeType(name, dom) && !ignoreElements.hasOwnProperty(name)) {
       this.addAll(dom.firstChild, null)
-      if (blockElements.hasOwnProperty(name) && this.top.type == this.schema.defaultTextblockType())
+      if (blockElements.hasOwnProperty(name))
         this.closing = true
     }
   }
@@ -173,12 +212,16 @@ class DOMParseState {
   }
 
   addAll(from, to, sync) {
-    let stack = sync && this.stack.slice()
+    let stack = sync && this.stack.slice(), needsSync = false
     for (let dom = from; dom != to; dom = dom.nextSibling) {
       this.addDOM(dom)
-      if (sync && blockElements.hasOwnProperty(dom.nodeName.toLowerCase()))
-        this.sync(stack)
+      if (sync) {
+        let isBlock = blockElements.hasOwnProperty(dom.nodeName.toLowerCase())
+        if (isBlock) this.sync(stack)
+        needsSync = !isBlock
+      }
     }
+    if (needsSync) this.sync(stack)
   }
 
   doClose() {
@@ -189,49 +232,44 @@ class DOMParseState {
   }
 
   insertNode(node) {
-    if (this.top.type.canContain(node)) {
-      this.doClose()
-    } else {
-      let found
-      for (let i = this.stack.length - 1; i >= 0; i--) {
-        let route = this.stack[i].type.findConnection(node.type)
-        if (!route) continue
-        if (i == this.stack.length - 1) {
-          this.doClose()
-        } else {
-          while (this.stack.length > i + 1) this.leave()
-        }
-        found = route
-        break
+    let added = this.top.add(node)
+    if (added) return added
+
+    let found
+    for (let i = this.stack.length - 1; i >= 0; i--) {
+      let builder = this.stack[i]
+      let route = builder.pos.findWrapping(node.type, node.attrs)
+      if (!route) continue
+      if (i == this.stack.length - 1) {
+        this.doClose()
+      } else {
+        while (this.stack.length > i + 1) this.leave()
       }
-      if (!found) return
-      for (let j = 0; j < found.length; j++)
-        this.enter(found[j])
-      if (this.marks.length) this.marks = noMarks
+      found = route
+      break
     }
-    this.top.content.push(node)
-    return node
+    if (!found) return
+    for (let i = 0; i < found.length; i++)
+      this.enter(found[i].type, found[i].attrs)
+    if (this.marks.length) this.marks = noMarks
+    return this.top.add(node)
   }
 
-  close(type, attrs, content) {
-    content = Fragment.from(content)
-    if (!type.checkContent(content, attrs)) {
-      content = type.fixContent(content, attrs)
-      if (!content) return null
-    }
-    return type.create(attrs, content, this.marks)
-  }
-
-  // :: (DOMNode, NodeType, ?Object, [Node]) → ?Node
+  // :: (NodeType, ?Object, [Node]) → ?Node
   // Insert a node of the given type, with the given content, based on
   // `dom`, at the current position in the document.
   insert(type, attrs, content) {
-    let closed = this.close(type, attrs, content)
-    if (closed) return this.insertNode(closed)
+    let frag = type.fixContent(Fragment.from(content), attrs)
+    if (!frag) return null
+    return this.insertNode(type.create(attrs, frag, this.marks))
   }
 
   enter(type, attrs) {
-    this.stack.push({type, attrs, content: []})
+    this.stack.push(new NodeBuilder(type, attrs))
+  }
+
+  enterPseudo() {
+    this.stack.push(new FragmentBuilder())
   }
 
   leave() {
@@ -242,7 +280,7 @@ class DOMParseState {
       if (last.text.length == 1) top.content.pop()
       else top.content[top.content.length - 1] = last.copy(last.text.slice(0, last.text.length - 1))
     }
-    let node = this.close(top.type, top.attrs, top.content)
+    let node = top.finish()
     if (node && this.stack.length) this.insertNode(node)
     return node
   }
@@ -251,7 +289,7 @@ class DOMParseState {
     while (this.stack.length > stack.length) this.leave()
     for (;;) {
       let n = this.stack.length - 1, one = this.stack[n], two = stack[n]
-      if (one.type == two.type && Node.sameAttrs(one.attrs, two.attrs)) break
+      if (one.type == two.type && compareDeep(one.attrs, two.attrs)) break
       this.leave()
     }
     while (stack.length > this.stack.length) {
@@ -339,7 +377,7 @@ BlockQuote.register("parseDOM", "blockquote", {parse: "block"})
 
 for (let i = 1; i <= 6; i++) Heading.registerComputed("parseDOM", "h" + i, type => {
   if (i <= type.maxLevel) return {
-    parse(dom, state) { state.wrapIn(dom, this, {level: String(i)}) }
+    parse(dom, state) { state.wrapIn(dom, this, {level: i}) }
   }
 })
 
@@ -361,7 +399,8 @@ CodeBlock.register("parseDOM", "pre", {parse(dom, state) {
 BulletList.register("parseDOM", "ul", {parse: "block"})
 
 OrderedList.register("parseDOM", "ol", {parse(dom, state) {
-  let attrs = {order: dom.getAttribute("start") || "1"}
+  let start = dom.getAttribute("start")
+  let attrs = {order: start ? +start : 1}
   state.wrapIn(dom, this, attrs)
 }})
 

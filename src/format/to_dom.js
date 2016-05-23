@@ -14,7 +14,7 @@ class DOMSerializer {
     this.doc = this.options.document || window.document
   }
 
-  // :: (string, ?Object, ...union<string, DOMNode>) → DOMNode
+  // :: (string, ?Object, ...[union<string, DOMNode>]) → DOMNode
   // Create a DOM node of the given type, with (optionally) the given
   // attributes and content. Content elements may be strings (for text
   // nodes) or other DOM nodes.
@@ -176,7 +176,7 @@ BlockQuote.prototype.countCoordsAsChild = (_, pos, dom, coords) => {
 
 def(BulletList, (node, s) => s.renderAs(node, "ul"))
 
-def(OrderedList, (node, s) => s.renderAs(node, "ol", {start: node.attrs.order != "1" && node.attrs.order}))
+def(OrderedList, (node, s) => s.renderAs(node, "ol", {start: node.attrs.order != 1 && node.attrs.order}))
 
 OrderedList.prototype.countCoordsAsChild = BulletList.prototype.countCoordsAsChild = (_, pos, dom, coords) => {
   for (let child = dom.firstChild; child; child = child.nextSibling) {

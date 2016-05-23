@@ -21,9 +21,10 @@ function add(value, target) {
   }
 }
 
-const reqFrame = typeof window !== 'undefined' && window.requestAnimationFrame || window.mozRequestAnimationFrame ||
+
+const reqFrame = window.requestAnimationFrame || window.mozRequestAnimationFrame ||
       window.webkitRequestAnimationFrame || window.msRequestAnimationFrame
-const cancelFrame = typeof window !== 'undefined' && window.cancelAnimationFrame || window.mozCancelAnimationFrame ||
+const cancelFrame = window.cancelAnimationFrame || window.mozCancelAnimationFrame ||
       window.webkitCancelAnimationFrame || window.msCancelAnimationFrame
 
 export function requestAnimationFrame(f) {
@@ -36,15 +37,15 @@ export function cancelAnimationFrame(handle) {
   else clearTimeout(handle)
 }
 
-const ie_upto10 = typeof navigator !== 'undefined' && /MSIE \d/.test(navigator.userAgent)
-const ie_11up = typeof navigator !== 'undefined' && /Trident\/(?:[7-9]|\d{2,})\..*rv:(\d+)/.exec(navigator.userAgent)
+const ie_upto10 = /MSIE \d/.test(navigator.userAgent)
+const ie_11up = /Trident\/(?:[7-9]|\d{2,})\..*rv:(\d+)/.exec(navigator.userAgent)
 
 export const browser = {
-  mac: typeof navigator !== 'undefined' && /Mac/.test(navigator.platform),
-  ie_upto10,
-  ie_11up,
-  ie: ie_upto10 || ie_11up,
-  gecko: typeof navigator !== 'undefined' && /gecko\/\d/i.test(navigator.userAgent)
+  mac: /Mac/.test(navigator.platform),
+  ie: ie_upto10 || !!ie_11up,
+  ie_version: ie_upto10 ? document.documentMode || 6 : ie_11up && +ie_11up[1],
+  gecko: /gecko\/\d/i.test(navigator.userAgent),
+  ios: /AppleWebKit/.test(navigator.userAgent) && /Mobile\/\w+/.test(navigator.userAgent)
 }
 
 

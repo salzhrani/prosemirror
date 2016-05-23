@@ -32,8 +32,12 @@ class MarkdownSerializer {
     this.closed = false
     this.inTightList = false
     // :: Object
-    // The options passed to the serializer.
-    this.options = options
+    // The options passed to the serializer. The following are supported:
+    //
+    // **`hardBreak`**: ?string
+    //   : Markdown to use for hard line breaks. Defaults to a backslash
+    //     followed by a newline.
+    this.options = options || {}
   }
 
   flushClose(size) {
@@ -138,7 +142,7 @@ class MarkdownSerializer {
           if (!other.type.markdownMixable) break
           if (mark.eq(other)) {
             if (i > j)
-              marks = marks.slice(0, j).concat(mark).concat(marks.slice(j, i)).concat(marks.slice(i + 1), len)
+              marks = marks.slice(0, j).concat(mark).concat(marks.slice(j, i)).concat(marks.slice(i + 1, len))
             else if (j > i)
               marks = marks.slice(0, i).concat(marks.slice(i + 1, j)).concat(mark).concat(marks.slice(j, len))
             continue outer
@@ -195,7 +199,7 @@ class MarkdownSerializer {
   // has special meaning only at the start of the line.
   esc(str, startOfLine) {
     str = str.replace(/[`*\\~+\[\]]/g, "\\$&")
-    if (startOfLine) str = str.replace(/^[:#-]/, "\\$&")
+    if (startOfLine) str = str.replace(/^[:#-*]/, "\\$&").replace(/^(\d+)\./, "$1\\.")
     return str
   }
 
@@ -254,7 +258,7 @@ def(BulletList, (state, node) => {
 })
 
 def(OrderedList, (state, node) => {
-  let start = Number(node.attrs.order || 1)
+  let start = node.attrs.order || 1
   let maxW = String(start + node.childCount - 1).length
   let space = state.repeat(" ", maxW + 2)
   state.renderList(node, space, i => {
@@ -277,7 +281,9 @@ def(Image, (state, node) => {
               (node.attrs.title ? " " + state.quote(node.attrs.title) : "") + ")")
 })
 
-def(HardBreak, state => state.write("\\\n"))
+const defaultHardBreak = "\\\n"
+
+def(HardBreak, state => state.write(state.options.hardBreak || defaultHardBreak))
 
 def(Text, (state, node) => state.text(node.text))
 

@@ -1,5 +1,5 @@
 import {toDOM, nodeToDOM} from "../format"
-import {elt} from "../dom"
+import {elt, browser} from "../dom"
 
 import {DIRTY_REDRAW} from "./main"
 import {childContainer} from "./dompos"
@@ -19,7 +19,7 @@ function options(ranges) {
           adjustTrailingHacks(dom, node)
         if (dom.contentEditable == "false")
           dom = elt("div", null, dom)
-        if (!node.type.contains) this.pos++
+        if (node.type.isLeaf) this.pos++
       }
 
       return dom
@@ -87,7 +87,7 @@ export function draw(pm, doc) {
 function adjustTrailingHacks(dom, node) {
   let needs = node.content.size == 0 || node.lastChild.type.isBR ||
       (node.type.isCode && node.lastChild.isText && /\n$/.test(node.lastChild.text))
-      ? "br" : !node.lastChild.isText && node.lastChild.type.contains == null ? "text" : null
+      ? "br" : !node.lastChild.isText && node.lastChild.type.isLeaf ? "text" : null
   let last = dom.lastChild
   let has = !last || last.nodeType != 1 || !last.hasAttribute("pm-ignore") ? null
       : last.nodeName == "BR" ? "br" : "text"
@@ -136,7 +136,7 @@ export function redraw(pm, dirty, doc, prev) {
         reuseDOM = true
       } else if (pChild && !child.isText && child.sameMarkup(pChild) && dirty.get(pChild) != DIRTY_REDRAW) {
         reuseDOM = true
-        if (pChild.type.contains)
+        if (!pChild.type.isLeaf)
           scan(childContainer(domPos), child, pChild, pos + offset + 1)
       } else {
         opts.pos = pos + offset
@@ -159,6 +159,17 @@ export function redraw(pm, dirty, doc, prev) {
       pChild = prev.maybeChild(++iPrev)
     }
     if (node.isTextblock) adjustTrailingHacks(dom, node)
+
+    if (browser.ios) iosHacks(dom)
   }
   scan(pm.content, doc, prev, 0)
+}
+
+function iosHacks(dom) {
+  if (dom.nodeName == "UL" || dom.nodeName == "OL") {
+    let oldCSS = dom.style.cssText
+    dom.style.cssText = oldCSS + "; list-style: square !important"
+    window.getComputedStyle(dom).listStyle
+    dom.style.cssText = oldCSS
+  }
 }

@@ -1,63 +1,34 @@
 import {Fragment, Slice} from "../model"
 
+import {ReplaceStep, ReplaceAroundStep} from "./replace_step"
 import {Transform} from "./transform"
-import {Step, StepResult} from "./step"
-import {PosMap} from "./map"
-
-// !! **`replace`**
-//   : Delete the part of the document between `from` and `to` and
-//     optionally replace it with another piece of content.
-//
-//     When new content is to be inserted, the step's parameter should
-//     be a `Slice` object that properly fits the 'gap' between `from`
-//     and `to`—the depths must line up, and the surrounding nodes
-//     must be able to be joined with the open sides of the slice.
-
-Step.define("replace", {
-  apply(doc, step) {
-    return StepResult.fromReplace(doc, step.from, step.to, step.param)
-  },
-  posMap(step) {
-    return new PosMap([step.from, step.to - step.from, step.param.size])
-  },
-  invert(step, oldDoc) {
-    return new Step("replace", step.from, step.from + step.param.size,
-                    oldDoc.slice(step.from, step.to))
-  },
-  paramToJSON(param) { return param.toJSON() },
-  paramFromJSON(schema, json) { return Slice.fromJSON(schema, json) }
-})
 
 // :: (number, number) → Transform
 // Delete the content between the given positions.
 Transform.prototype.delete = function(from, to) {
-  if (from != to) this.replace(from, to, Slice.empty)
-  return this
+  return this.replace(from, to, Slice.empty)
 }
 
 // :: (number, ?number, ?Slice) → Transform
 // Replace the part of the document between `from` and `to` with the
 // part of the `source` between `start` and `end`.
 Transform.prototype.replace = function(from, to = from, slice = Slice.empty) {
-  let $from = this.doc.resolve(from), $to = this.doc.resolve(to)
-  let {fitted, distAfter} = fitSliceInto($from, $to, slice), fSize = fitted.size
-  if (from == to && !fSize) return this
-  this.step("replace", from, to, fitted)
+  if (from == to && !slice.size) return this
 
-  // If the endpoints of the replacement don't end right next to each
-  // other, we may need to move text that occurs directly after the
-  // slice to fit onto the inserted content. But only if there is text
-  // before and after the cut, and if those endpoints aren't already
-  // next to each other.
-  if (!fSize || !$to.parent.isTextblock) return this
-  let after = from + fSize
-  let inner = !slice.size ? from : distAfter < 0 ? -1 : after - distAfter, $inner
-  if (inner == -1 || inner == after ||
-      !($inner = this.doc.resolve(inner)).parent.isTextblock ||
-      !$inner.parent.type.canContainFragment($to.parent.content))
-    return this
-  mergeTextblockAfter(this, $inner, this.doc.resolve(after))
-  return this
+  let $from = this.doc.resolve(from), $to = this.doc.resolve(to)
+  let placed = placeSlice($from, slice)
+
+  let fittedLeft = fitLeft($from, placed)
+  let fitted = fitRight($from, $to, fittedLeft)
+  if (!fitted) return this
+  if (fittedLeft.size != fitted.size && canMoveText($from, $to, fittedLeft)) {
+    let d = $to.depth, after = $to.after(d)
+    while (d > 1 && after == $to.end(--d)) ++after
+    let fittedAfter = fitRight($from, this.doc.resolve(after), fittedLeft)
+    if (fittedAfter)
+      return this.step(new ReplaceAroundStep(from, after, to, $to.end(), fittedAfter, fittedLeft.size))
+  }
+  return this.step(new ReplaceStep(from, to, fitted))
 }
 
 // :: (number, number, union<Fragment, Node, [Node]>) → Transform
@@ -87,119 +58,141 @@ Transform.prototype.insertInline = function(pos, node) {
   return this.insert(pos, node.mark(this.doc.marksAt(pos)))
 }
 
-// This is an output variable for closeFragment and friends, used to
-// track the distance between the end of the resulting slice and the
-// end of the inserted content, so that we can find back the position
-// afterwards.
-let distAfter = 0
 
-// : (ResolvedPos, ResolvedPos, Slice) → {fitted: Slice, distAfter: number}
-// Mangle the content of a slice so that it fits between the given
-// positions.
-function fitSliceInto($from, $to, slice) {
-  let base = $from.sameDepth($to)
-  let placed = placeSlice($from, slice), outer = outerPlaced(placed)
-  if (outer) base = Math.min(outer.depth, base)
-
-  // distAfter starts negative, and is set to a positive value when
-  // the end of the inserted content is placed.
-  distAfter = -1e10 // FIXME kludge
-  let fragment = closeFragment($from.node(base).type, fillBetween($from, $to, base, placed), $from, $to, base)
-  return {fitted: new Slice(fragment, $from.depth - base, $to.depth - base),
-          distAfter: distAfter - ($to.depth - base)}
-}
-
-function outerPlaced(placed) {
-  for (let i = 0; i < placed.length; i++) if (placed[i]) return placed[i]
-}
-
-function fillBetween($from, $to, depth, placed) {
-  let fromNext = $from.depth > depth && $from.node(depth + 1)
-  let toNext = $to.depth > depth && $to.node(depth + 1)
-  let placedHere = placed[depth]
-
-  if (fromNext && toNext && fromNext.type.canContainContent(toNext.type) && !placedHere)
-    return Fragment.from(closeNode(fromNext, fillBetween($from, $to, depth + 1, placed),
-                                   $from, $to, depth + 1))
-
-  let content = Fragment.empty
-  if (placedHere) {
-    content = closeLeft(placedHere.content, placedHere.openLeft)
-    if (placedHere.isEnd) distAfter = placedHere.openRight
+function fitLeftInner($from, depth, placed, placedBelow) {
+  let content = Fragment.empty, openRight = 0, placedHere = placed[depth]
+  if ($from.depth > depth) {
+    let inner = fitLeftInner($from, depth + 1, placed, placedBelow || placedHere)
+    openRight = inner.openRight + 1
+    content = Fragment.from($from.node(depth + 1).copy(inner.content))
   }
 
-  distAfter--
-  if (fromNext)
-    content = content.addToStart(closeNode(fromNext, fillFrom($from, depth + 1, placed),
-                                           $from, null, depth + 1))
-  if (toNext)
-    content = closeTo(content, $to, depth + 1, placedHere ? placedHere.openRight : 0)
-  else if (placedHere)
-    content = closeRight(content, placedHere.openRight)
-  distAfter++
+  if (placedHere) {
+    content = content.append(placedHere.content)
+    openRight = placedHere.openRight
+  }
+  if (placedBelow) {
+    content = content.append($from.node(depth).contentMatchAt($from.indexAfter(depth)).fillBefore(Fragment.empty, true))
+    openRight = 0
+  }
 
+  return {content, openRight}
+}
+
+function fitLeft($from, placed) {
+  let {content, openRight} = fitLeftInner($from, 0, placed, false)
+  return new Slice(content, $from.depth, openRight || 0)
+}
+
+function fitRightJoin(content, parent, $from, $to, depth, openLeft, openRight) {
+  let match, count = content.childCount, matchCount = count - (openRight > 0 ? 1 : 0)
+  if (openLeft < 0)
+    match = parent.contentMatchAt(matchCount)
+  else if (count == 1 && openRight > 0)
+    match = $from.node(depth).contentMatchAt(openLeft ? $from.index(depth) : $from.indexAfter(depth))
+  else
+    match = $from.node(depth).contentMatchAt($from.indexAfter(depth))
+      .matchFragment(content, count > 0 && openLeft ? 1 : 0, matchCount)
+
+  let toNode = $to.node(depth)
+  if (openRight > 0 && depth < $to.depth) {
+    // FIXME find a less allocaty approach
+    let after = toNode.content.cutByIndex($to.indexAfter(depth)).addToStart(content.lastChild)
+    let joinable = match.fillBefore(after, true)
+    // Can't insert content if there's a single node stretched across this gap
+    if (joinable && joinable.size && openLeft > 0 && count == 1) joinable = null
+
+    if (joinable) {
+      let inner = fitRightJoin(content.lastChild.content, content.lastChild, $from, $to,
+                               depth + 1, count == 1 ? openLeft - 1 : -1, openRight - 1)
+      if (inner) {
+        let last = content.lastChild.copy(inner)
+        if (joinable.size)
+          return content.sliceByIndex(0, count - 1).append(joinable).addToEnd(last)
+        else
+          return content.replaceChild(count - 1, last)
+      }
+    }
+  }
+  if (openRight > 0)
+    match = match.matchNode(count == 1 && openLeft > 0 ? $from.node(depth + 1) : content.lastChild)
+
+  // If we're here, the next level can't be joined, so we see what
+  // happens if we leave it open.
+  let toIndex = $to.index(depth)
+  if (toIndex == toNode.childCount && !toNode.type.compatibleContent(parent.type)) return null
+  let joinable = match.fillBefore(toNode.content, true, toIndex)
+  if (!joinable) return null
+
+  if (openRight > 0) {
+    let closed = fitRightClosed(content.lastChild, openRight - 1, $from, depth + 1,
+                                count == 1 ? openLeft - 1 : -1)
+    content = content.replaceChild(count - 1, closed)
+  }
+  content = content.append(joinable)
+  if ($to.depth > depth)
+    content = content.addToEnd(fitRightSeparate($to, depth + 1))
   return content
 }
 
-function fillFrom($from, depth, placed) {
-  let placedHere = placed[depth], content = Fragment.empty
-  if (placedHere) {
-    content = closeRight(placedHere.content, placedHere.openRight)
-    if (placedHere.isEnd) distAfter = placedHere.openRight
+function fitRightClosed(node, openRight, $from, depth, openLeft) {
+  let match, content = node.content, count = content.childCount
+  if (openLeft >= 0)
+    match = $from.node(depth).contentMatchAt($from.indexAfter(depth))
+      .matchFragment(content, openLeft > 0 ? 1 : 0, count)
+  else
+    match = node.contentMatchAt(count)
+
+  if (openRight > 0) {
+    let closed = fitRightClosed(content.lastChild, openRight - 1, $from, depth + 1,
+                                count == 1 ? openLeft - 1 : -1)
+    content = content.replaceChild(count - 1, closed)
   }
 
-  distAfter--
-  if ($from.depth > depth)
-    content = content.addToStart(closeNode($from.node(depth + 1), fillFrom($from, depth + 1, placed),
-                                           $from, null, depth + 1))
-  distAfter++
-
-  return content
+  return node.copy(content.append(match.fillBefore(Fragment.empty, true)))
 }
 
-function closeTo(content, $to, depth, openDepth) {
-  let after = $to.node(depth)
-  if (openDepth == 0 || !after.type.canContainContent(content.lastChild.type)) {
-    let finish = closeNode(after, fillTo($to, depth), null, $to, depth)
-    distAfter += finish.nodeSize
-    return closeRight(content, openDepth).addToEnd(finish)
+function fitRightSeparate($to, depth) {
+  let node = $to.node(depth)
+  let fill = node.contentMatchAt(0).fillBefore(node.content, true, $to.index(depth))
+  if ($to.depth > depth) fill = fill.addToEnd(fitRightSeparate($to, depth + 1))
+  return node.copy(fill)
+}
+
+function normalizeSlice(content, openLeft, openRight) {
+  while (openLeft > 0 && openRight > 0 && content.childCount == 1) {
+    content = content.firstChild.content
+    openLeft--
+    openRight--
   }
-  let inner = content.lastChild.content
-  if (depth < $to.depth) inner = closeTo(inner, $to, depth + 1, openDepth - 1)
-  return content.replaceChild(content.childCount - 1, after.copy(inner))
+  return new Slice(content, openLeft, openRight)
 }
 
-function fillTo(to, depth) {
-  if (to.depth == depth) return Fragment.empty
-  return Fragment.from(closeNode(to.node(depth + 1), fillTo(to, depth + 1), null, to, depth + 1))
+// : (ResolvedPos, ResolvedPos, number, Slice) → Slice
+function fitRight($from, $to, slice) {
+  let fitted = fitRightJoin(slice.content, $from.node(0), $from, $to, 0, slice.openLeft, slice.openRight)
+  // FIXME we might want to be clever about selectively dropping nodes here?
+  if (!fitted) return null
+  return normalizeSlice(fitted, slice.openLeft, $to.depth)
 }
 
-// Closing nodes is the process of ensuring that they contain valid
-// content, optionally changing the content (that is inside of the
-// replace) to make sure.
+function canMoveText($from, $to, slice) {
+  if (!$to.parent.isTextblock) return false
 
-function closeRight(content, openDepth) {
-  if (openDepth == 0) return content
-  let last = content.lastChild, closed = closeNode(last, closeRight(last.content, openDepth - 1))
-  return closed == last ? content : content.replaceChild(content.childCount - 1, closed)
-}
-
-function closeLeft(content, openDepth) {
-  if (openDepth == 0) return content
-  let first = content.firstChild, closed = closeNode(first, first.content)
-  return closed == first ? content : content.replaceChild(0, closed)
-}
-
-function closeFragment(type, content, $to, $from, depth) {
-  // FIXME replace this with a more general approach
-  if (type.canBeEmpty) return content
-  let hasContent = content.size || ($to && ($to.depth > depth || $to.index(depth))) ||
-      ($from && ($from.depth > depth || $from.index(depth) < $from.node(depth).childCount))
-  return hasContent ? content : type.defaultContent()
-}
-
-function closeNode(node, content, $to, $from, depth) {
-  return node.copy(closeFragment(node.type, content, $to, $from, depth))
+  let match
+  if (!slice.openRight) {
+    let parent = $from.node($from.depth - (slice.openLeft - slice.openRight))
+    if (!parent.isTextblock) return false
+    match = parent.contentMatchAt(parent.childCount)
+    if (slice.size)
+      match = match.matchFragment(slice.content, slice.openLeft ? 1 : 0)
+  } else {
+    let parent = nodeRight(slice.content, slice.openRight)
+    if (!parent.isTextblock) return false
+    match = parent.contentMatchAt(parent.childCount)
+  }
+  match = match.matchFragment($to.parent.content, $to.index())
+  return match && match.validEnd()
 }
 
 // Algorithm for 'placing' the elements of a slice into a gap:
@@ -218,96 +211,78 @@ function closeNode(node, content, $to, $from, depth) {
 //
 // If the outer content can't be placed, a set of wrapper nodes is
 // made up for it (by rooting it in the document node type using
-// findConnection), and the algorithm continues to iterate over those.
+// findWrapping), and the algorithm continues to iterate over those.
 // This is guaranteed to find a fit, since both stacks now start with
 // the same node type (doc).
 
-function nodeLeft(slice, depth) {
-  let content = slice.content
+function nodeLeft(content, depth) {
   for (let i = 1; i < depth; i++) content = content.firstChild.content
   return content.firstChild
 }
 
+function nodeRight(content, depth) {
+  for (let i = 1; i < depth; i++) content = content.lastChild.content
+  return content.lastChild
+}
+
 function placeSlice($from, slice) {
-  let dFrom = $from.depth, unplaced = null, openLeftUnplaced = 0
+  let dFrom = $from.depth, unplaced = null
   let placed = [], parents = null
 
   for (let dSlice = slice.openLeft;; --dSlice) {
     let curType, curAttrs, curFragment
     if (dSlice >= 0) {
       if (dSlice > 0) { // Inside slice
-        ;({type: curType, attrs: curAttrs, content: curFragment} = nodeLeft(slice, dSlice))
+        ;({type: curType, attrs: curAttrs, content: curFragment} = nodeLeft(slice.content, dSlice))
       } else if (dSlice == 0) { // Top of slice
         curFragment = slice.content
       }
       if (dSlice < slice.openLeft) curFragment = curFragment.cut(curFragment.firstChild.nodeSize)
     } else { // Outside slice
       curFragment = Fragment.empty
-      curType = parents[parents.length + dSlice - 1]
+      let parent = parents[parents.length + dSlice - 1]
+      curType = parent.type
+      curAttrs = parent.attrs
     }
     if (unplaced)
       curFragment = curFragment.addToStart(unplaced)
 
     if (curFragment.size == 0 && dSlice <= 0) break
 
-    let found = findPlacement(curType, curFragment, $from, dFrom)
-    if (found > -1) {
-      if (curFragment.size > 0)
-        placed[found] = {content: curFragment,
-                         openLeft: openLeftUnplaced,
-                         openRight: dSlice > 0 ? 0 : slice.openRight - dSlice,
-                         isEnd: dSlice <= 0,
-                         depth: found}
+    // FIXME cut/remove marks when it helps find a placement
+    let found = findPlacement(curFragment, $from, dFrom)
+    if (found) {
+      if (curFragment.size > 0) placed[found.depth] = {
+        content: found.fill.append(curFragment),
+        openRight: dSlice > 0 ? 0 : slice.openRight - dSlice,
+        depth: found.depth
+      }
       if (dSlice <= 0) break
       unplaced = null
-      openLeftUnplaced = 0
-      dFrom = Math.max(0, found - 1)
+      dFrom = Math.max(0, found.depth - 1)
     } else {
       if (dSlice == 0) {
-        parents = $from.node(0).type.findConnectionToKind(curFragment.leastSuperKind())
+        let top = $from.node(0)
+        parents = top.contentMatchAt($from.index(0)).findWrapping(curFragment.firstChild.type, curFragment.firstChild.attrs)
         if (!parents) break
-        parents.unshift($from.node(0).type)
-        curType = parents[parents.length - 1]
+        let last = parents[parents.length - 1]
+        if (last ? !last.type.contentExpr.matches(last.attrs, curFragment)
+                 : !top.canReplace($from.indexAfter(0), $from.depth ? $from.index(0) : $from.indexAfter(0), curFragment)) break
+        parents = [{type: top.type, attrs: top.attrs}].concat(parents)
+        curType = parents[parents.length - 1].type
+        curAttrs = parents[parents.length - 1].type
       }
+      curFragment = curType.contentExpr.start(curAttrs).fillBefore(curFragment, true).append(curFragment)
       unplaced = curType.create(curAttrs, curFragment)
-      openLeftUnplaced++
     }
   }
 
   return placed
 }
 
-function findPlacement(type, fragment, $from, start) {
+function findPlacement(fragment, $from, start) {
   for (let d = start; d >= 0; d--) {
-    let fromType = $from.node(d).type
-    if (type ? fromType.canContainContent(type) : fromType.canContainFragment(fragment))
-      return d
+    let match = $from.node(d).contentMatchAt($from.indexAfter(d)).fillBefore(fragment)
+    if (match) return {depth: d, fill: match}
   }
-  return -1
-}
-
-// When a replace ends in an (open) textblock, and the content that
-// ends up before it also ends in an open textblock, the textblock
-// after is moved to and connected with the one before it. This
-// influences content outside of the replaced range, so it is not done
-// as part of the replace step itself, but instead tacked on as a set
-// of split/ancestor/join steps.
-
-function mergeTextblockAfter(tr, $inside, $after) {
-  let base = $inside.sameDepth($after)
-
-  let end = $after.end($after.depth), cutAt = end + 1, cutDepth = $after.depth - 1
-  while (cutDepth > base && $after.index(cutDepth) + 1 == $after.node(cutDepth).childCount) {
-    --cutDepth
-    ++cutAt
-  }
-  if (cutDepth > base) tr.split(cutAt, cutDepth - base)
-  let types = [], attrs = []
-  for (let i = base + 1; i <= $inside.depth; i++) {
-    let node = $inside.node(i)
-    types.push(node.type)
-    attrs.push(node.attrs)
-  }
-  tr.step("ancestor", $after.pos, end, {depth: $after.depth - base, types, attrs})
-  tr.join($after.pos - ($after.depth - base), $inside.depth - base)
 }
