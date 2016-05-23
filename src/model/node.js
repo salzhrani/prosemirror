@@ -2,6 +2,7 @@ import {Fragment} from "./fragment"
 import {Mark} from "./mark"
 import {Slice, replace} from "./replace"
 import {ResolvedPos} from "./resolvedpos"
+import {compareDeep} from "../util/comparedeep"
 
 const emptyArray = [], emptyAttrs = Object.create(null)
 
@@ -43,7 +44,7 @@ export class Node {
   // The size of this node. For text node, this is the amount of
   // characters. For leaf nodes, it is one. And for non-leaf nodes, it
   // is the size of the content plus two (the start and end token).
-  get nodeSize() { return this.type.contains ? 2 + this.content.size : 1 }
+  get nodeSize() { return this.type.isLeaf ? 1 : 2 + this.content.size }
 
   // :: number
   // The number of children that the node has.
@@ -95,14 +96,9 @@ export class Node {
   // Check whether this node's markup correspond to the given type,
   // attributes, and marks.
   hasMarkup(type, attrs, marks) {
-    return this.type == type && Node.sameAttrs(this.attrs, attrs || emptyAttrs) && Mark.sameSet(this.marks, marks || emptyArray)
-  }
-
-  static sameAttrs(a, b) {
-    if (a == b) return true
-    for (let prop in a)
-      if (a[prop] !== b[prop]) return false
-    return true
+    return this.type == type &&
+      compareDeep(this.attrs, attrs || type.defaultAttrs || emptyAttrs) &&
+      Mark.sameSet(this.marks, marks || emptyArray)
   }
 
   // :: (?Fragment) → Node
@@ -117,7 +113,7 @@ export class Node {
   // Create a copy of this node, with the given set of marks instead
   // of the node's own marks.
   mark(marks) {
-    return new this.constructor(this.type, this.attrs, this.content, marks)
+    return marks == this.marks ? this : new this.constructor(this.type, this.attrs, this.content, marks)
   }
 
   // :: (number, ?number) → Node
@@ -185,10 +181,10 @@ export class Node {
     return {node, index: index - 1, offset: offset - node.nodeSize}
   }
 
-  // :: (?number, ?number, (node: Node, pos: number, parent: Node))
+  // :: (?number, ?number, (node: Node, pos: number, parent: Node, index: number))
   // Iterate over all nodes between the given two positions, calling
-  // the callback with the node, its position, and its parent
-  // node.
+  // the callback with the node, its position, its parent
+  // node, and its index in that node.
   nodesBetween(from, to, f, pos = 0) {
     this.content.nodesBetween(from, to, f, pos, this)
   }
@@ -211,7 +207,7 @@ export class Node {
   // inclusiveLeft and inclusiveRight properties. If the position is at the
   // start of a non-empty node, the marks of the node after it are returned.
   marksAt(pos) {
-    let $pos = this.resolve(pos), parent = $pos.parent, index = $pos.index($pos.depth)
+    let $pos = this.resolve(pos), parent = $pos.parent, index = $pos.index()
 
     // In an empty parent, return the empty array
     if (parent.content.size == 0) return emptyArray
@@ -264,6 +260,43 @@ export class Node {
     return wrapMarks(this.marks, name)
   }
 
+  // :: (number) → ContentMatch
+  // Get the content match in this node at the given index.
+  contentMatchAt(index) {
+    return this.type.contentExpr.getMatchAt(this.attrs, this.content, index)
+  }
+
+  // :: (number, number, ?Fragment, ?number, ?number) → bool
+  // Test whether replacing the range `from` to `to` (by index) with
+  // the given replacement fragment (which defaults to the empty
+  // fragment) would leave the node's content valid. You can
+  // optionally pass `start` and `end` indices into the replacement
+  // fragment.
+  canReplace(from, to, replacement, start, end) {
+    return this.type.contentExpr.checkReplace(this.attrs, this.content, from, to, replacement, start, end)
+  }
+
+  // :: (number, number, NodeType, ?[Mark]) → bool
+  // Test whether replacing the range `from` to `to` (by index) with a
+  // node of the given type and marks would be valid.
+  canReplaceWith(from, to, type, attrs, marks) {
+    return this.type.contentExpr.checkReplaceWith(this.attrs, this.content, from, to, type, attrs, marks || emptyArray)
+  }
+
+  // :: (Node) → bool
+  // Test whether the given node's content could be appended to this
+  // node. If that node is empty, this will only return true if there
+  // is at least one node type that can appear in both nodes (to avoid
+  // merging completely incompatible nodes).
+  canAppend(other) {
+    if (other.content.size) return this.canReplace(this.childCount, this.childCount, other.content)
+    else return this.type.compatibleContent(other.type)
+  }
+
+  defaultContentType(at) {
+    return this.contentMatchAt(at).element.defaultType()
+  }
+
   // :: () → Object
   // Return a JSON-serializeable representation of this node.
   toJSON() {
@@ -286,9 +319,6 @@ export class Node {
     let content = json.text != null ? json.text : Fragment.fromJSON(schema, json.content)
     return type.create(json.attrs, content, json.marks && json.marks.map(schema.markFromJSON))
   }
-
-  // This is a hack to be able to treat a node object as an iterator result
-  get value() { return this }
 }
 
 // ;; #forward=Node

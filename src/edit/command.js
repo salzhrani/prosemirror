@@ -286,14 +286,16 @@ function markActive(pm, type) {
     return pm.doc.rangeHasMark(sel.from, sel.to, type)
 }
 
-function canAddInline(pm, type) {
-  let {from, to, empty} = pm.selection
+function canAddMark(pm, type) {
+  let {from, to, empty} = pm.selection, $from
   if (empty)
-    return !type.isInSet(pm.activeMarks()) && pm.doc.resolve(from).parent.type.canContainMark(type)
+    return !type.isInSet(pm.activeMarks()) && ($from = pm.doc.resolve(from)) &&
+      $from.parent.contentMatchAt($from.index()).allowsMark(type)
   let can = false
-  pm.doc.nodesBetween(from, to, node => {
-    if (can || node.isTextblock && !node.type.canContainMark(type)) return false
-    if (node.isInline && !type.isInSet(node.marks)) can = true
+  pm.doc.nodesBetween(from, to, (node, _, parent, i) => {
+    if (can) return false
+    can = node.isInline && !type.isInSet(node.marks) &&
+      parent.contentMatchAt(i + 1).allowsMark(type)
   })
   return can
 }
@@ -301,11 +303,10 @@ function canAddInline(pm, type) {
 function markApplies(pm, type) {
   let {from, to} = pm.selection
   let relevant = false
-  pm.doc.nodesBetween(from, to, node => {
-    if (node.isTextblock) {
-      if (node.type.canContainMark(type)) relevant = true
-      return false
-    }
+  pm.doc.nodesBetween(from, to, (node, _, parent, i) => {
+    if (relevant) return false
+    relevant = (node.isTextblock && node.contentMatchAt(0).allowsMark(type)) ||
+      (node.isInline && parent.contentMatchAt(i + 1).allowsMark(type))
   })
   return relevant
 }
@@ -364,7 +365,7 @@ MarkType.derivableCommands.set = function(conf) {
     select(pm) {
       return conf.inverseSelect
         ? markApplies(pm, this) && !markActive(pm, this)
-        : canAddInline(pm, this)
+        : canAddMark(pm, this)
     },
     params: deriveParams(this, conf.params)
   }
@@ -385,8 +386,8 @@ function isAtTopOfListItem(doc, from, to, listType) {
   let $from = doc.resolve(from)
   return $from.sameParent(doc.resolve(to)) &&
     $from.depth >= 2 &&
-    $from.index($from.depth - 1) == 0 &&
-    listType.canContain($from.node($from.depth - 1))
+    $from.index(-1) == 0 &&
+    $from.node(-2).type.compatibleContent(listType)
 }
 
 NodeType.derivableCommands.wrap = function(conf) {
@@ -396,19 +397,18 @@ NodeType.derivableCommands.wrap = function(conf) {
       let $from = pm.doc.resolve(from)
       if (conf.list && head && isAtTopOfListItem(pm.doc, from, to, this)) {
         // Don't do anything if this is the top of the list
-        if ($from.index($from.depth - 2) == 0) return false
+        if ($from.index(-2) == 0) return false
         doJoin = true
       }
       let tr = pm.tr.wrap(from, to, this, fillAttrs(conf, params))
-      if (doJoin) tr.join($from.before($from.depth - 1))
+      if (doJoin) tr.join($from.before(-1))
       return tr.apply(pm.apply.scroll)
     },
     select(pm) {
-      let {from, to, head} = pm.selection, $from
-      if (conf.list && head && isAtTopOfListItem(pm.doc, from, to, this) &&
-          ($from = pm.doc.resolve(from)).index($from.depth - 2) == 0)
+      let {from, to, head} = pm.selection
+      if (conf.list && head && isAtTopOfListItem(pm.doc, from, to, this) && pm.doc.resolve(from).index(-2) == 0)
         return false
-      return canWrap(pm.doc, from, to, this, conf.attrs)
+      return canWrap(pm.doc, from, to, this)
     },
     params: deriveParams(this, conf.params)
   }
@@ -443,13 +443,17 @@ NodeType.derivableCommands.make = conf => ({
     let {from, to} = pm.selection
     return pm.tr.setBlockType(from, to, this, conf.attrs).apply(pm.apply.scroll)
   },
-  // FIXME deal with situations where not all text blocks have the same kind
   select(pm) {
-    let {from, to, node} = pm.selection
-    if (node)
-      return node.isTextblock && !node.hasMarkup(this, conf.attrs)
-    else
-      return !alreadyHasBlockType(pm.doc, from, to, this, conf.attrs)
+    let {from, to, node} = pm.selection, depth
+    if (node) {
+      if (!node.isTextblock || node.hasMarkup(this, conf.attrs)) return false
+      depth = 0
+    } else {
+      if (alreadyHasBlockType(pm.doc, from, to, this, conf.attrs)) return false
+      depth = 1
+    }
+    let $from = pm.doc.resolve(from), parentDepth = $from.depth - depth, index = $from.index(parentDepth)
+    return $from.node(parentDepth).canReplaceWith(index, index + 1, this, conf.attrs)
   },
   active(pm) {
     return activeTextblockIs(pm, this, conf.attrs)
@@ -462,7 +466,8 @@ NodeType.derivableCommands.insert = function(conf) {
       return pm.tr.replaceSelection(this.create(fillAttrs(conf, params))).apply(pm.apply.scroll)
     },
     select: this.isInline ? function(pm) {
-      return pm.doc.resolve(pm.selection.from).parent.type.canContainType(this)
+      let $from = pm.doc.resolve(pm.selection.from), index = $from.index()
+      return $from.parent.canReplaceWith(index, index, this)
     } : null,
     params: deriveParams(this, conf.params)
   }

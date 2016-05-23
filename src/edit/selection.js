@@ -35,7 +35,7 @@ export class SelectionState {
   // : (Selection, boolean)
   // Set the current selection.
   set(range, clearLast) {
-    this.pm.ensureOperation({readSelection: false})
+    this.pm.ensureOperation({readSelection: false, selection: range})
     this.range = range
     if (clearLast !== false) this.lastAnchorNode = null
   }
@@ -84,24 +84,10 @@ export class SelectionState {
   readFromDOM() {
     if (!hasFocus(this.pm) || !this.domChanged()) return false
 
-    let sel = window.getSelection(), doc = this.pm.doc
-    let anchor = posFromDOM(this.pm, sel.anchorNode, sel.anchorOffset)
-    let head = sel.isCollapsed ? anchor : posFromDOM(this.pm, sel.focusNode, sel.focusOffset)
+    let {range, adjusted} = selectionFromDOM(this.pm, this.pm.doc, this.range.head)
+    this.setAndSignal(range)
 
-    let newRange = findSelectionNear(doc, head, this.range.head != null && this.range.head < head ? 1 : -1)
-    if (newRange instanceof TextSelection) {
-      let selNearAnchor = findSelectionNear(doc, anchor, anchor > newRange.to ? -1 : 1, true)
-      newRange = new TextSelection(selNearAnchor.anchor, newRange.head)
-    } else if (anchor < newRange.from || anchor > newRange.to) {
-      // If head falls on a node, but anchor falls outside of it,
-      // create a text selection between them
-      let inv = anchor > newRange.to
-      newRange = new TextSelection(findSelectionNear(doc, anchor, inv ? -1 : 1, true).anchor,
-                                   findSelectionNear(doc, inv ? newRange.from : newRange.to, inv ? 1 : -1, true).head)
-    }
-    this.setAndSignal(newRange)
-
-    if (newRange instanceof NodeSelection || newRange.head != head || newRange.anchor != anchor) {
+    if (range instanceof NodeSelection || adjusted) {
       this.toDOM()
     } else {
       this.clearNode()
@@ -188,14 +174,14 @@ export class Selection {
   // :: number #path=Selection.prototype.to
   // The right-bound of the selection.
 
-  // :: bool #path=Selection.empty
+  // :: bool #path=Selection.prototype.empty
   // True if the selection is an empty text selection (head an anchor
   // are the same).
 
-  // :: (other: Selection) → bool #path=Selection.eq
+  // :: (other: Selection) → bool #path=Selection.prototype.eq
   // Test whether the selection is the same as another selection.
 
-  // :: (doc: Node, mapping: Mappable) → Selection #path=Selection.map
+  // :: (doc: Node, mapping: Mappable) → Selection #path=Selection.prototype.map
   // Map this selection through a [mappable](#Mappable) thing. `doc`
   // should be the new document, to which we are mapping.
 }
@@ -308,6 +294,25 @@ class SelectionToken {
   }
 }
 
+export function selectionFromDOM(pm, doc, oldHead, loose) {
+  let sel = window.getSelection()
+  let anchor = posFromDOM(pm, sel.anchorNode, sel.anchorOffset, loose)
+  let head = sel.isCollapsed ? anchor : posFromDOM(pm, sel.focusNode, sel.focusOffset, loose)
+
+  let range = findSelectionNear(doc, head, oldHead != null && oldHead < head ? 1 : -1)
+  if (range instanceof TextSelection) {
+    let selNearAnchor = findSelectionNear(doc, anchor, anchor > range.to ? -1 : 1, true)
+    range = new TextSelection(selNearAnchor.anchor, range.head)
+  } else if (anchor < range.from || anchor > range.to) {
+    // If head falls on a node, but anchor falls outside of it,
+    // create a text selection between them
+    let inv = anchor > range.to
+    range = new TextSelection(findSelectionNear(doc, anchor, inv ? -1 : 1, true).anchor,
+                              findSelectionNear(doc, inv ? range.from : range.to, inv ? 1 : -1, true).head)
+  }
+  return {range, adjusted: head != range.head || anchor != range.anchor}
+}
+
 export function hasFocus(pm) {
   if (document.activeElement != pm.content) return false
   let sel = window.getSelection()
@@ -321,7 +326,7 @@ function findSelectionIn(node, pos, index, dir, text) {
   for (let i = index - (dir > 0 ? 0 : 1); dir > 0 ? i < node.childCount : i >= 0; i += dir) {
     let child = node.child(i)
     if (child.isTextblock) return new TextSelection(pos + dir)
-    if (child.type.contains) {
+    if (!child.type.isLeaf) {
       let inner = findSelectionIn(child, pos + dir, dir < 0 ? child.childCount : 0, dir, text)
       if (inner) return inner
     } else if (!text && child.type.selectable) {
@@ -341,7 +346,7 @@ function findSelectionIn(node, pos, index, dir, text) {
 export function findSelectionFrom(doc, pos, dir, text) {
   let $pos = doc.resolve(pos)
   let inner = $pos.parent.isTextblock ? new TextSelection(pos)
-      : findSelectionIn($pos.parent, pos, $pos.index($pos.depth), dir, text)
+      : findSelectionIn($pos.parent, pos, $pos.index(), dir, text)
   if (inner) return inner
 
   for (let depth = $pos.depth - 1; depth >= 0; depth--) {
@@ -374,7 +379,7 @@ export function findSelectionAtEnd(node, text) {
 // from a position would leave a text block.
 export function verticalMotionLeavesTextblock(pm, pos, dir) {
   let $pos = pm.doc.resolve(pos)
-  let dom = DOMAfterPos(pm, $pos.before($pos.depth))
+  let dom = DOMAfterPos(pm, $pos.before())
   let coords = coordsAtPos(pm, pos)
   for (let child = dom.firstChild; child; child = child.nextSibling) {
     if (child.nodeType != 1) continue

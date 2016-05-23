@@ -40,8 +40,6 @@ export function fromMarkdown(schema, text, options) {
 //       return parser.use(require("markdown-it-sub"))
 //     })
 
-// FIXME give registerable things their own top-level reference guide entries?
-
 // :: union<string, (state: MarkdownParseState, token: MarkdownToken) → Node> #path=MarkdownParseSpec.parse
 // The parsing function for this token. It is, when a matching token
 // is encountered, passed the parsing state and the token, and must
@@ -139,11 +137,8 @@ class MarkdownParseState {
   // :: (NodeType, ?Object, ?[Node]) → ?Node
   // Add a node at the current position.
   addNode(type, attrs, content) {
-    content = Fragment.from(content)
-    if (!type.checkContent(content, attrs)) {
-      content = type.fixContent(content, attrs)
-      if (!content) return null
-    }
+    content = type.fixContent(Fragment.from(content), attrs)
+    if (!content) return null
     let node = type.create(attrs, content, this.marks)
     this.push(node)
     return node
@@ -242,12 +237,13 @@ ListItem.register("parseMarkdown", "list_item", {parse: "block"})
 
 BulletList.register("parseMarkdown", "bullet_list", {parse: "block"})
 
-OrderedList.register("parseMarkdown", "ordered_list", {parse: "block", attrs: (state, tok) => ({
-  order: state.getAttr(tok, "order") || "1"
-})})
+OrderedList.register("parseMarkdown", "ordered_list", {parse: "block", attrs: (state, tok) => {
+  let order = state.getAttr(tok, "order")
+  return {order: order ? +order : 1}
+}})
 
 Heading.register("parseMarkdown", "heading", {parse: "block", attrs: function(_, tok) {
-  return {level: "" + Math.min(this.maxLevel, +tok.tag.slice(1))}
+  return {level: Math.min(this.maxLevel, +tok.tag.slice(1))}
 }})
 
 function trimTrailingNewline(str) {

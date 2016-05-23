@@ -2,7 +2,7 @@ import {findDiffStart, findDiffEnd, Mark} from "../model"
 import {fromDOM} from "../format"
 import {mapThroughResult} from "../transform/map"
 
-import {findSelectionFrom} from "./selection"
+import {findSelectionFrom, selectionFromDOM} from "./selection"
 import {DOMFromPos} from "./dompos"
 
 export function readInputChange(pm) {
@@ -53,10 +53,13 @@ function isAtStart($pos, depth) {
   return $pos.parentOffset == 0
 }
 
-// FIXME special case for inside-single-textblock-not-at-sides situation
-// (To avoid re-parsing huge textblocks for tiny changes)
 function rangeAroundSelection(pm) {
   let {sel, doc} = pm.operation, $from = doc.resolve(sel.from), $to = doc.resolve(sel.to)
+  // When the selection is entirely inside a text block, use
+  // rangeAroundComposition to get a narrow range.
+  if ($from.sameParent($to) && $from.parent.isTextblock && $from.parentOffset && $to.parentOffset < $to.parent.content.size)
+    return rangeAroundComposition(pm, 0)
+
   for (let depth = 0;; depth++) {
     let fromStart = isAtStart($from, depth + 1), toEnd = isAtEnd($to, depth + 1)
     if (fromStart || toEnd || $from.index(depth) != $to.index(depth) || $to.node(depth).isTextblock) {
@@ -74,9 +77,9 @@ function rangeAroundComposition(pm, margin) {
   let {sel, doc} = pm.operation
   let $from = doc.resolve(sel.from), $to = doc.resolve(sel.to)
   if (!$from.sameParent($to)) return rangeAroundSelection(pm)
-  let startOff = Math.max(0, Math.min($from.parentOffset, $to.parentOffset) - margin)
+  let startOff = Math.max(0, $from.parentOffset - margin)
   let size = $from.parent.content.size
-  let endOff = Math.min(size, Math.max($from.parentOffset, $to.parentOffset) + margin)
+  let endOff = Math.min(size, $to.parentOffset + margin)
 
   if (startOff > 0)
     startOff = $from.parent.childBefore(startOff).offset
@@ -84,7 +87,7 @@ function rangeAroundComposition(pm, margin) {
     let after = $from.parent.childAfter(endOff)
     endOff = after.offset + after.node.nodeSize
   }
-  let nodeStart = $from.start($from.depth)
+  let nodeStart = $from.start()
   return {from: nodeStart + startOff, to: nodeStart + endOff}
 }
 
@@ -95,16 +98,16 @@ function readDOMChange(pm, range) {
   // DOM, so we discard it.
   if (op.docSet) {
     pm.markAllDirty()
-    return
+    return false
   }
 
   let parsed = parseBetween(pm, range.from, range.to)
   let compare = op.doc.slice(range.from, range.to)
   let change = findDiff(compare.content, parsed.content, range.from, op.sel.from)
-  if (!change) return
+  if (!change) return false
   let fromMapped = mapThroughResult(op.mappings, change.start)
   let toMapped = mapThroughResult(op.mappings, change.endA)
-  if (fromMapped.deleted && toMapped.deleted) return
+  if (fromMapped.deleted && toMapped.deleted) return false
 
   // Mark nodes touched by this change as 'to be redrawn'
   markDirtyFor(pm, op.doc, change.start, change.endA)
@@ -119,11 +122,20 @@ function readDOMChange(pm, range) {
     pm.input.dispatchKey("Enter")
   } else if ($from.sameParent($to) && $from.parent.isTextblock &&
              (text = uniformTextBetween(parsed, $from.pos, $to.pos)) != null) {
-    pm.input.insertText(fromMapped.pos, toMapped.pos, text)
+    pm.input.insertText(fromMapped.pos, toMapped.pos, text, doc => domSel(pm, doc))
   } else {
     let slice = parsed.slice(change.start - range.from, change.endB - range.from)
-    pm.tr.replace(fromMapped.pos, toMapped.pos, slice).apply(pm.apply.scroll)
+    let tr = pm.tr.replace(fromMapped.pos, toMapped.pos, slice)
+    tr.apply({
+      scrollIntoView: true,
+      selection: domSel(pm, tr.doc)
+    })
   }
+  return true
+}
+
+function domSel(pm, doc) {
+  if (pm.hasFocus()) return selectionFromDOM(pm, doc, null, true).range
 }
 
 function uniformTextBetween(node, from, to) {

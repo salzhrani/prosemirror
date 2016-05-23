@@ -1,11 +1,11 @@
 export {Transform, TransformError} from "./transform"
 export {Step, StepResult} from "./step"
-export {canLift, canWrap} from "./ancestor"
-export {joinPoint, joinable} from "./join"
+export {canWrap, canLift, joinPoint, joinable, canSplit} from "./structure"
 export {PosMap, MapResult, Remapping} from "./map"
-import "./mark"
-import "./split"
+export {AddMarkStep, RemoveMarkStep} from "./mark_step"
+export {ReplaceStep, ReplaceAroundStep} from "./replace_step"
 import "./replace"
+import "./mark"
 
 // !! This module defines a way to transform documents. Transforming
 // happens in `Step`s, which are atomic, well-defined modifications to
@@ -20,5 +20,3 @@ import "./replace"
 //
 // You can read more about transformations in [this
 // guide](guide/transform.md).
-//
-// These are the types of steps defined:

@@ -12,8 +12,8 @@ export function posBeforeFromDOM(pm, node) {
 }
 
 // : (ProseMirror, DOMNode, number) → number
-export function posFromDOM(pm, dom, domOffset) {
-  if (pm.operation && pm.doc != pm.operation.doc)
+export function posFromDOM(pm, dom, domOffset, loose) {
+  if (!loose && pm.operation && pm.doc != pm.operation.doc)
     throw new RangeError("Fetching a position from an outdated DOM structure")
 
   if (domOffset == null) {
@@ -28,9 +28,21 @@ export function posFromDOM(pm, dom, domOffset) {
     let adjust = 0
     if (dom.nodeType == 3) {
       innerOffset += domOffset
+      // IE has a habit of splitting text nodes for no apparent reason
+      if (loose) for (let before = dom.previousSibling; before && before.nodeType == 3; before = before.previousSibling)
+        innerOffset += before.nodeValue.length
     } else if (tag = dom.getAttribute("pm-offset") && !childContainer(dom)) {
-      let size = +dom.getAttribute("pm-size")
-      return posBeforeFromDOM(pm, dom) + (domOffset == dom.childNodes.length ? size : Math.min(innerOffset, size))
+      if (!loose) {
+        let size = +dom.getAttribute("pm-size")
+        if (domOffset == dom.childNodes.length) innerOffset = size
+        else innerOffset = Math.min(innerOffset, size)
+      } else {
+        for (let i = 0; i < domOffset; i++) {
+          let child = dom.childNodes[i]
+          if (child.nodeType == 3) innerOffset += child.nodeValue.length
+        }
+      }
+      return posBeforeFromDOM(pm, dom) + innerOffset
     } else if (dom.hasAttribute("pm-container")) {
       break
     } else if (tag = dom.getAttribute("pm-inner-offset")) {
@@ -51,6 +63,8 @@ export function posFromDOM(pm, dom, domOffset) {
     if (child.nodeType == 1 && (tag = child.getAttribute("pm-offset"))) {
       before += +tag + +child.getAttribute("pm-size")
       break
+    } else if (loose && child.nodeType == 3) {
+      before += child.nodeValue.length
     }
   }
   return start + before + innerOffset
@@ -61,18 +75,18 @@ export function childContainer(dom) {
   return dom.hasAttribute("pm-container") ? dom : dom.querySelector("[pm-container]")
 }
 
-// : (DOMNode, number) → {node: DOMNode, offset: number}
+// : (ProseMirror, number) → {node: DOMNode, offset: number}
 // Find the DOM node and offset into that node that the given document
 // position refers to.
-export function DOMFromPos(pm, pos, liberal) {
-  if (!liberal && pm.operation && pm.doc != pm.operation.doc)
+export function DOMFromPos(pm, pos, loose) {
+  if (!loose && pm.operation && pm.doc != pm.operation.doc)
     throw new RangeError("Resolving a position in an outdated DOM structure")
 
   let container = pm.content, offset = pos
-  outer: for (;;) {
+  for (;;) {
     for (let child = container.firstChild, i = 0;; child = child.nextSibling, i++) {
       if (!child) {
-        if (offset && !liberal) throw new RangeError("Failed to find node at " + pos + " rem = " + offset)
+        if (offset && !loose) throw new RangeError("Failed to find node at " + pos)
         return {node: container, offset: i}
       }
 
@@ -96,7 +110,7 @@ export function DOMFromPos(pm, pos, liberal) {
   }
 }
 
-// : (DOMNode, number) → DOMNode
+// : (ProseMirror, number) → DOMNode
 export function DOMAfterPos(pm, pos) {
   let {node, offset} = DOMFromPos(pm, pos)
   if (node.nodeType != 1 || offset == node.childNodes.length)
@@ -129,22 +143,21 @@ function windowRect() {
           top: 0, bottom: window.innerHeight}
 }
 
-const scrollMargin = 5
-
 export function scrollIntoView(pm, pos) {
   if (!pos) pos = pm.sel.range.head || pm.sel.range.from
   let coords = coordsAtPos(pm, pos)
   for (let parent = pm.content;; parent = parent.parentNode) {
+    let {scrollThreshold, scrollMargin} = pm.options
     let atBody = parent == document.body
     let rect = atBody ? windowRect() : parent.getBoundingClientRect()
     let moveX = 0, moveY = 0
-    if (coords.top < rect.top)
+    if (coords.top < rect.top + scrollThreshold)
       moveY = -(rect.top - coords.top + scrollMargin)
-    else if (coords.bottom > rect.bottom)
+    else if (coords.bottom > rect.bottom - scrollThreshold)
       moveY = coords.bottom - rect.bottom + scrollMargin
-    if (coords.left < rect.left)
+    if (coords.left < rect.left + scrollThreshold)
       moveX = -(rect.left - coords.left + scrollMargin)
-    else if (coords.right > rect.right)
+    else if (coords.right > rect.right - scrollThreshold)
       moveX = coords.right - rect.right + scrollMargin
     if (moveX || moveY) {
       if (atBody) {
@@ -159,11 +172,11 @@ export function scrollIntoView(pm, pos) {
 }
 
 function findOffsetInNode(node, coords) {
-  let closest, dyClosest = 1e8, coordsClosest, offset = 0
+  let closest, dyClosest = 2e8, coordsClosest, offset = 0
   for (let child = node.firstChild; child; child = child.nextSibling) {
     let rects
     if (child.nodeType == 1) rects = child.getClientRects()
-    else if (child.nodeType == 3) rects = textRects(child)
+    else if (child.nodeType == 3) rects = textRange(child).getClientRects()
     else continue
 
     for (let i = 0; i < rects.length; i++) {
@@ -216,44 +229,42 @@ export function posAtCoords(pm, coords) {
   return posFromDOM(pm, node, offset)
 }
 
-function textRect(node, from, to) {
+function textRange(node, from, to) {
   let range = document.createRange()
-  range.setEnd(node, to)
-  range.setStart(node, from)
-  return range.getBoundingClientRect()
+  range.setEnd(node, to == null ? node.nodeValue.length : to)
+  range.setStart(node, from || 0)
+  return range
 }
 
-function textRects(node) {
-  let range = document.createRange()
-  range.setEnd(node, node.nodeValue.length)
-  range.setStart(node, 0)
-  return range.getClientRects()
+function singleRect(object, bias) {
+  let rects = object.getClientRects()
+  return !rects.length ? object.getBoundingClientRect() : rects[bias < 0 ? 0 : rects.length - 1]
 }
 
 // : (ProseMirror, number) → ClientRect
-// Given a position in the document model, get a bounding box of the character at
-// that position, relative to the window.
+// Given a position in the document model, get a bounding box of the
+// character at that position, relative to the window.
 export function coordsAtPos(pm, pos) {
   let {node, offset} = DOMFromPos(pm, pos)
   let side, rect
   if (node.nodeType == 3) {
     if (offset < node.nodeValue.length) {
-      rect = textRect(node, offset, offset + 1)
+      rect = singleRect(textRange(node, offset, offset + 1), -1)
       side = "left"
     }
     if ((!rect || rect.left == rect.right) && offset) {
-      rect = textRect(node, offset - 1, offset)
+      rect = singleRect(textRange(node, offset - 1, offset), 1)
       side = "right"
     }
   } else if (node.firstChild) {
     if (offset < node.childNodes.length) {
       let child = node.childNodes[offset]
-      rect = child.nodeType == 3 ? textRect(child, 0, child.nodeValue.length) : child.getBoundingClientRect()
+      rect = singleRect(child.nodeType == 3 ? textRange(child) : child, -1)
       side = "left"
     }
-    if ((!rect || rect.left == rect.right) && offset) {
+    if ((!rect || rect.top == rect.bottom) && offset) {
       let child = node.childNodes[offset - 1]
-      rect = child.nodeType == 3 ? textRect(child, 0, child.nodeValue.length) : child.getBoundingClientRect()
+      rect = singleRect(child.nodeType == 3 ? textRange(child) : child, 1)
       side = "right"
     }
   } else {
@@ -286,7 +297,7 @@ export function selectableNodeAbove(pm, dom, coords, liberal) {
         if (result != null) return result
       }
       // Leaf nodes are implicitly clickable
-      if ((liberal || node.type.contains == null) && node.type.selectable)
+      if ((liberal || node.type.isLeaf) && node.type.selectable)
         return pos
       if (!liberal) return null
     }

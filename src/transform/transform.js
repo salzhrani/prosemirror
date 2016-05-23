@@ -1,6 +1,5 @@
 import {ProseMirrorError} from "../util/error"
 
-import {Step} from "./step"
 import {mapThrough, mapThroughResult} from "./map"
 
 export class TransformError extends ProseMirrorError {}
@@ -22,16 +21,21 @@ export class Transform {
     this.maps = []
   }
 
+  // :: Node The document at the start of the transformation.
   get before() { return this.docs.length ? this.docs[0] : this.doc }
 
   // :: (Step) → Transform
-  step(step, from, to, param) {
-    if (typeof step == "string") step = new Step(step, from, to, param)
+  // Apply a new step in this transformation, saving the result.
+  // Throws an error when the step fails.
+  step(step) {
     let result = this.maybeStep(step)
     if (result.failed) throw new TransformError(result.failed)
     return this
   }
 
+  // :: (Step) → StepResult
+  // Apply a new step in this transformation, returning the step
+  // result.
   maybeStep(step) {
     let result = step.apply(this.doc)
     if (!result.failed) {
@@ -46,10 +50,10 @@ export class Transform {
   // :: (number, ?number) → MapResult
   // Map a position through the whole transformation (all the position
   // maps in [`maps`](#Transform.maps)), and return the result.
-  mapResult(pos, bias) { return mapThroughResult(this.maps, pos, bias) }
+  mapResult(pos, bias, start) { return mapThroughResult(this.maps, pos, bias, start) }
 
   // :: (number, ?number) → number
   // Map a position through the whole transformation, and return the
   // mapped position.
-  map(pos, bias) { return mapThrough(this.maps, pos, bias) }
+  map(pos, bias, start) { return mapThrough(this.maps, pos, bias, start) }
 }

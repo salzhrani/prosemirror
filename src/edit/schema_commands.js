@@ -1,5 +1,6 @@
 import {HardBreak, BulletList, OrderedList, ListItem, BlockQuote, Heading, Paragraph, CodeBlock, HorizontalRule,
         StrongMark, EmMark, CodeMark, LinkMark, Image} from "../model"
+import {canSplit} from "../transform"
 
 import {selectedNodeAttr} from "./command"
 import {toText} from "../format"
@@ -261,10 +262,12 @@ ListItem.register("command", "split", {
     let {from, to, node} = pm.selection, $from = pm.doc.resolve(from)
     if ((node && node.isBlock) ||
         $from.depth < 2 || !$from.sameParent(pm.doc.resolve(to))) return false
-    let grandParent = $from.node($from.depth - 1)
+    let grandParent = $from.node(-1)
     if (grandParent.type != this) return false
-    let nextType = to == $from.end($from.depth) ? pm.schema.defaultTextblockType() : null
-    return pm.tr.delete(from, to).split(from, 2, nextType).apply(pm.apply.scroll)
+    let nextType = to == $from.end() ? grandParent.defaultContentType($from.indexAfter(-1)) : null
+    let tr = pm.tr.delete(from, to)
+    if (canSplit(tr.doc, from, 2, nextType)) return tr.split(from, 2, nextType).apply(pm.apply.scroll)
+    return false
   },
   keys: ["Enter(50)"]
 })
@@ -274,7 +277,7 @@ function selectedListItems(pm, type) {
   if (node && node.type == type) return {from, to, depth: $from.depth + 1}
 
   let itemDepth = $from.parent.type == type ? $from.depth
-      : $from.depth > 0 && $from.node($from.depth - 1).type == type ? $from.depth - 1 : null
+      : $from.depth > 0 && $from.node(-1).type == type ? $from.depth - 1 : null
   if (itemDepth == null) return
 
   let $to = pm.doc.resolve(to)
@@ -296,10 +299,9 @@ ListItem.register("command", "lift", {
     let $to = pm.doc.resolve(pm.selection.to)
     if ($to.node(selected.depth - 2).type != this) return false
     let itemsAfter = selected.to < $to.end(selected.depth - 1)
-    let tr = pm.tr.splitIfNeeded(selected.to, 2).splitIfNeeded(selected.from, 2)
+    let tr = pm.tr.lift(selected.from, selected.to)
     let end = tr.map(selected.to, -1)
-    tr.step("ancestor", tr.map(selected.from), end, {depth: 2})
-    if (itemsAfter) tr.join(end - 2)
+    if (itemsAfter) tr.join(end)
     return tr.apply(pm.apply.scroll)
   },
   keys: ["Mod-[(20)"]
@@ -332,7 +334,7 @@ for (let i = 1; i <= 10; i++)
   //
   // **Keybindings:** Shift-Ctrl-1 through Shift-Ctrl-6
   Heading.registerComputed("command", "make" + i, type => {
-    let attrs = {level: String(i)}
+    let attrs = {level: i}
     if (i <= type.maxLevel) return {
       derive: {name: "make", attrs},
       label: "Change to heading " + i,

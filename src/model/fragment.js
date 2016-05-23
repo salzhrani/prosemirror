@@ -30,7 +30,7 @@ export class Fragment {
   nodesBetween(from, to, f, nodeStart, parent) {
     for (let i = 0, pos = 0; pos < to; i++) {
       let child = this.content[i], end = pos + child.nodeSize
-      if (end > from && f(child, nodeStart + pos, parent) !== false && child.content.size) {
+      if (end > from && f(child, nodeStart + pos, parent, i) !== false && child.content.size) {
         let start = pos + 1
         child.nodesBetween(Math.max(0, from - start),
                            Math.min(child.content.size, to - start),
@@ -63,6 +63,12 @@ export class Fragment {
     return new Fragment(result, size)
   }
 
+  cutByIndex(from, to) {
+    if (from == to) return Fragment.empty
+    if (from == 0 && to == this.content.length) return this
+    return new Fragment(this.content.slice(from, to))
+  }
+
   // :: (Fragment) → Fragment
   // Create a new fragment containing the content of this fragment and
   // `other`.
@@ -82,8 +88,10 @@ export class Fragment {
   // Create a new fragment in which the node at the given index is
   // replaced by the given node.
   replaceChild(index, node) {
+    let current = this.content[index]
+    if (current == node) return this
     let copy = this.content.slice()
-    let size = this.size + node.nodeSize - copy[index].nodeSize
+    let size = this.size + node.nodeSize - current.nodeSize
     copy[index] = node
     return new Fragment(copy, size)
   }
@@ -190,15 +198,6 @@ export class Fragment {
       f(child, p)
       p += child.nodeSize
     }
-  }
-
-  leastSuperKind() {
-    let kind
-    for (let i = this.childCount - 1; i >= 0; i--) {
-      let cur = this.child(i).type.kind
-      kind = kind ? kind.sharedSuperKind(cur) : cur
-    }
-    return kind
   }
 
   // : (number, ?number) → {index: number, offset: number}

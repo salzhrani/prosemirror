@@ -456,6 +456,9 @@ test("horizontal_rule:insert",
 test("horizontal_rule:insert",
      doc("<a>", p("bar")),
      doc(hr))
+test("horizontal_rule:insert",
+     doc(p("foo<a>")),
+     doc(p("foo"), hr))
 
 const test_ = namespace("command")
 

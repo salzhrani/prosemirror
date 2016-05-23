@@ -1,7 +1,10 @@
 import {Node, TextNode} from "./node"
 import {Fragment} from "./fragment"
 import {Mark} from "./mark"
+import {ContentExpr} from "./content"
+
 import {copyObj} from "../util/obj"
+import {OrderedMap} from "../util/orderedmap"
 
 // ;; The [node](#NodeType) and [mark](#MarkType) types
 // that make up a schema have several things in common—they support
@@ -30,22 +33,22 @@ class SchemaItem {
     let defaults = Object.create(null)
     for (let attrName in this.attrs) {
       let attr = this.attrs[attrName]
-      if (attr.default == null) return null
+      if (attr.default === undefined) return null
       defaults[attrName] = attr.default
     }
     return defaults
   }
 
-  computeAttrs(attrs, arg) {
+  computeAttrs(attrs) {
     let built = Object.create(null)
     for (let name in this.attrs) {
       let value = attrs && attrs[name]
       if (value == null) {
         let attr = this.attrs[name]
-        if (attr.default != null)
+        if (attr.default !== undefined)
           value = attr.default
         else if (attr.compute)
-          value = attr.compute(this, arg)
+          value = attr.compute(this)
         else
           throw new RangeError("No value supplied for attribute " + name)
       }
@@ -109,6 +112,16 @@ class SchemaItem {
   }
 }
 
+function overlayObj(base, update) {
+  let copy = copyObj(base)
+  for (let name in update) {
+    let value = update[name]
+    if (value == null) delete copy[name]
+    else copy[name] = value
+  }
+  return copy
+}
+
 // ;; Node types are objects allocated once per `Schema`
 // and used to tag `Node` instances with a type. They are
 // instances of sub-types of this class, and contain information about
@@ -125,6 +138,7 @@ export class NodeType extends SchemaItem {
     // getter all the time.
     this.freezeAttrs()
     this.defaultAttrs = this.getDefaultAttrs()
+    this.contentExpr = null
     // :: Schema
     // A link back to the `Schema` the node type belongs to.
     this.schema = schema
@@ -165,98 +179,23 @@ export class NodeType extends SchemaItem {
   // Controls whether this node type is locked.
   get locked() { return false }
 
-  // :: ?NodeKind
-  // The kind of nodes this node may contain. `null` means it's a
-  // leaf node.
-  get contains() { return null }
+  // :: bool
+  // True for node types that allow no content.
+  get isLeaf() { return this.contentExpr.isLeaf }
 
-  // :: ?NodeKind Sets the _kind_ of the node, which is used to
-  // determine valid parent/child [relations](#NodeType.contains).
-  // Should only be `null` for nodes that can't be child nodes (i.e.
-  // the document top node).
-  get kind() { return null }
-
-  // :: (Fragment) → bool
-  // Test whether the content of the given fragment could be contained
-  // in this node type.
-  canContainFragment(fragment) {
-    for (let i = 0; i < fragment.childCount; i++)
-      if (!this.canContain(fragment.child(i))) return false
-    return true
-  }
-
-  // :: (Node) → bool
-  // Test whether the given node could be contained in this node type.
-  canContain(node) {
-    if (!this.canContainType(node.type)) return false
-    for (let i = 0; i < node.marks.length; i++)
-      if (!this.canContainMark(node.marks[i])) return false
-    return true
-  }
-
-  // :: (MarkType) → bool
-  // Test whether this node type can contain children with the given
-  // mark type.
-  canContainMark(mark) {
-    let contains = this.containsMarks
-    if (contains === true) return true
-    if (contains) for (let i = 0; i < contains.length; i++)
-      if (contains[i] == mark.name) return true
+  hasRequiredAttrs(ignore) {
+    for (let n in this.attrs)
+      if (this.attrs[n].isRequired && (!ignore || !(n in ignore))) return true
     return false
   }
 
-  // :: (NodeType) → bool
-  // Test whether this node type can contain nodes of the given node
-  // type.
-  canContainType(type) {
-    return type.kind && type.kind.isSubKind(this.contains)
+  compatibleContent(other) {
+    return this == other || this.contentExpr.compatible(other.contentExpr)
   }
 
-  // :: (NodeType) → bool
-  // Test whether the nodes that can be contained in the given node
-  // type are a sub-type of the nodes that can be contained in this
-  // type.
-  canContainContent(type) {
-    return type.contains && type.contains.isSubKind(this.contains)
-  }
-
-  // :: (NodeType) → ?[NodeType]
-  // Find a set of intermediate node types, possibly empty, that have
-  // to be inserted between this type and `other` to put a node of
-  // type `other` into this type.
-  findConnection(other) {
-    return other.kind && this.findConnectionToKind(other.kind)
-  }
-
-  findConnectionToKind(kind) {
-    let cache = this.schema.cached.connections, key = this.name + "-" + kind.id
-    if (key in cache) return cache[key]
-    return cache[key] = this.findConnectionToKindInner(kind)
-  }
-
-  findConnectionToKindInner(kind) {
-    if (kind.isSubKind(this.contains)) return []
-
-    let seen = Object.create(null)
-    let active = [{from: this, via: []}]
-    while (active.length) {
-      let current = active.shift()
-      for (let name in this.schema.nodes) {
-        let type = this.schema.nodes[name]
-        if (type.contains && type.defaultAttrs && !(type.contains.id in seen) &&
-            current.from.canContainType(type)) {
-          let via = current.via.concat(type)
-          if (kind.isSubKind(type.contains)) return via
-          active.push({from: type, via: via})
-          seen[type.contains.id] = true
-        }
-      }
-    }
-  }
-
-  computeAttrs(attrs, content) {
+  computeAttrs(attrs) {
     if (!attrs && this.defaultAttrs) return this.defaultAttrs
-    else return super.computeAttrs(attrs, content)
+    else return super.computeAttrs(attrs)
   }
 
   // :: (?Object, ?union<Fragment, Node, [Node]>, ?[Mark]) → Node
@@ -267,135 +206,53 @@ export class NodeType extends SchemaItem {
   // `null`. Similarly `marks` may be `null` to default to the empty
   // set of marks.
   create(attrs, content, marks) {
-    return new Node(this, this.computeAttrs(attrs, content), Fragment.from(content), Mark.setFrom(marks))
+    return new Node(this, this.computeAttrs(attrs), Fragment.from(content), Mark.setFrom(marks))
   }
 
-  // FIXME use declarative schema, maybe tie in with .contains
-  checkContent(content, _attrs) {
-    if (content.size == 0) return this.canBeEmpty
-    for (let i = 0; i < content.childCount; i++)
-      if (!this.canContain(content.child(i))) return false
-    return true
+  // :: (Fragment, ?Object) → bool
+  // Returns true if the given fragment is valid content for this node
+  // type.
+  validContent(content, attrs) {
+    return this.contentExpr.matches(attrs, content)
   }
 
-  fixContent(_content, _attrs) {
-    return this.defaultContent()
+  // :: (Fragment, ?Object) → ?Fragment
+  // Verify whether the given fragment would be valid content for this
+  // node type, and if not, try to insert content before and/or after
+  // it to make it valid. Returns null if no valid fragment could be
+  // created.
+  fixContent(content = Fragment.empty, attrs) {
+    let before = this.contentExpr.start(attrs).fillBefore(content)
+    if (!before) return null
+    content = before.append(content)
+    let after = this.contentExpr.getMatchAt(attrs, content).fillBefore(Fragment.empty, true)
+    if (!after) return
+    return content.append(after)
   }
 
-  // :: bool
-  // Controls whether this node is allowed to be empty.
-  get canBeEmpty() { return true }
-
-  static compile(types, schema) {
+  static compile(nodes, schema) {
     let result = Object.create(null)
-    for (let name in types)
-      result[name] = new types[name](name, schema)
+    nodes.forEach((name, spec) => result[name] = new spec.type(name, schema))
 
     if (!result.doc) throw new RangeError("Every schema needs a 'doc' type")
     if (!result.text) throw new RangeError("Every schema needs a 'text' type")
 
     return result
   }
-
-  // :: union<bool, [string]>
-  // The mark types that child nodes of this node may have. `false`
-  // means no marks, `true` means any mark, and an array of strings
-  // can be used to explicitly list the allowed mark types.
-  get containsMarks() { return false }
 }
-
-// ;; Class used to represent node [kind](#NodeType.kind).
-export class NodeKind {
-  // :: (string, ?[NodeKind], ?[NodeKind])
-  // Create a new node kind with the given set of superkinds (the new
-  // kind counts as a member of each of the superkinds) and subkinds
-  // (which will count as a member of this new kind). The `name` field
-  // is only for debugging purposes—kind equivalens is defined by
-  // identity.
-  constructor(name, supers, subs) {
-    this.name = name
-    this.id = ++NodeKind.nextID
-    this.supers = Object.create(null)
-    this.supers[this.id] = this
-    this.subs = subs || []
-
-    if (supers) supers.forEach(sup => this.addSuper(sup))
-    if (subs) subs.forEach(sub => this.addSub(sub))
-  }
-
-  sharedSuperKind(other) {
-    if (this.isSubKind(other)) return other
-    if (other.isSubKind(this)) return this
-    let found
-    for (let id in this.supers) {
-      let shared = other.supers[id]
-      if (shared && (!found || shared.isSupKind(found)))
-        found = shared
-    }
-    return found
-  }
-
-  addSuper(sup) {
-    for (let id in sup.supers) {
-      this.supers[id] = sup.supers[id]
-      sup.subs.push(this)
-    }
-  }
-
-  addSub(sub) {
-    if (this.supers[sub.id])
-      throw new RangeError("Circular subkind relation")
-    sub.supers[this.id] = true
-    sub.subs.forEach(next => this.addSub(next))
-  }
-
-  // :: (NodeKind) → bool
-  // Test whether `other` is a subkind of this kind (or the same
-  // kind).
-  isSubKind(other) {
-    return other && (other.id in this.supers) || false
-  }
-}
-NodeKind.nextID = 0
-
-// :: NodeKind The node kind used for generic block nodes.
-NodeKind.block = new NodeKind("block")
-
-// :: NodeKind The node kind used for generic inline nodes.
-NodeKind.inline = new NodeKind("inline")
-
-// :: NodeKind The node kind used for text nodes. Subkind of
-// `NodeKind.inline`.
-NodeKind.text = new NodeKind("text", [NodeKind.inline])
 
 // ;; Base type for block nodetypes.
 export class Block extends NodeType {
-  get contains() { return NodeKind.block }
-  get kind() { return NodeKind.block }
   get isBlock() { return true }
-
-  get canBeEmpty() { return this.contains == null }
-
-  defaultContent() {
-    let inner = this.schema.defaultTextblockType().create()
-    let conn = this.findConnection(inner.type)
-    if (!conn) throw new RangeError("Can't create default content for " + this.name)
-    for (let i = conn.length - 1; i >= 0; i--) inner = conn[i].create(null, inner)
-    return Fragment.from(inner)
-  }
 }
 
 // ;; Base type for textblock node types.
 export class Textblock extends Block {
-  get contains() { return NodeKind.inline }
-  get containsMarks() { return true }
   get isTextblock() { return true }
-  get canBeEmpty() { return true }
 }
 
 // ;; Base type for inline node types.
 export class Inline extends NodeType {
-  get kind() { return NodeKind.inline }
   get isInline() { return true }
 }
 
@@ -403,29 +260,29 @@ export class Inline extends NodeType {
 export class Text extends Inline {
   get selectable() { return false }
   get isText() { return true }
-  get kind() { return NodeKind.text }
 
   create(attrs, content, marks) {
-    return new TextNode(this, this.computeAttrs(attrs, content), content, marks)
+    return new TextNode(this, this.computeAttrs(attrs), content, marks)
   }
 }
 
 // Attribute descriptors
 
-// ;; Attributes are named strings associated with nodes and marks.
+// ;; Attributes are named values associated with nodes and marks.
 // Each node type or mark type has a fixed set of attributes, which
-// instances of this class are used to control.
+// instances of this class are used to control. Attribute values must
+// be JSON-serializable.
 export class Attribute {
   // :: (Object)
   // Create an attribute. `options` is an object containing the
   // settings for the attributes. The following settings are
   // supported:
   //
-  // **`default`**`: ?string`
+  // **`default`**`: ?any`
   //   : The default value for this attribute, to choose when no
   //     explicit value is provided.
   //
-  // **`compute`**`: ?(Fragment) → string`
+  // **`compute`**`: ?(Fragment) → any`
   //   : A function that computes a default value for the attribute from
   //     the node's content.
   //
@@ -439,6 +296,10 @@ export class Attribute {
     this.default = options.default
     this.compute = options.compute
     this.label = options.label
+  }
+
+  get isRequired() {
+    return this.default === undefined && !this.compute
   }
 }
 
@@ -462,13 +323,6 @@ export class MarkType extends SchemaItem {
     this.instance = defaults && new Mark(this, defaults)
   }
 
-  // :: number
-  // Mark type ranks are used to determine the order in which mark
-  // arrays are sorted. (If multiple mark types end up with the same
-  // rank, they still get a fixed order in the schema, but there's no
-  // guarantee what it will be.)
-  static get rank() { return 50 }
-
   // :: bool
   // Whether this mark should be active when the cursor is positioned
   // at the end of the mark.
@@ -483,20 +337,9 @@ export class MarkType extends SchemaItem {
     return new Mark(this, this.computeAttrs(attrs))
   }
 
-  static getOrder(marks) {
-    let sorted = []
-    for (let name in marks) sorted.push({name, rank: marks[name].rank})
-    sorted.sort((a, b) => a.rank - b.rank)
-    let ranks = Object.create(null)
-    for (let i = 0; i < sorted.length; i++) ranks[sorted[i].name] = i
-    return ranks
-  }
-
   static compile(marks, schema) {
-    let order = this.getOrder(marks)
-    let result = Object.create(null)
-    for (let name in marks)
-      result[name] = new marks[name](name, order[name], schema)
+    let result = Object.create(null), rank = 0
+    marks.forEach((name, markType) => result[name] = new markType(name, rank++, schema))
     return result
   }
 
@@ -518,51 +361,30 @@ export class MarkType extends SchemaItem {
   }
 }
 
-// Schema specifications are data structures that specify a schema --
-// a set of node types, their names, attributes, and nesting behavior.
+// ;; #path=SchemaSpec #kind=interface
+// An object describing a schema, as passed to the `Schema`
+// constructor.
 
-// ;; A schema specification is a blueprint for an actual
-// `Schema`. It maps names to node and mark types.
-//
-// A specification consists of an object that associates node names
-// with node type constructors and another similar object associating
-// mark names with mark type constructors.
-export class SchemaSpec {
-  // :: (?Object<constructor<NodeType>>, ?Object<constructor<MarkType>>)
-  // Create a schema specification from scratch. The arguments map
-  // node names to node type constructors and mark names to mark type
-  // constructors.
-  constructor(nodes, marks) {
-    this.nodes = nodes || {}
-    this.marks = marks || {}
-  }
+// :: union<Object<NodeSpec>, OrderedMap<NodeSpec>> #path=SchemaSpec.nodes
+// The node types in this schema. Maps names to `NodeSpec` objects
+// describing the node to be associated with that name. Their order is significant
 
-  // :: (?Object<?NodeType>, ?Object<?MarkType>) → SchemaSpec
-  // Base a new schema spec on this one by specifying nodes and marks
-  // to add or remove.
-  //
-  // When `nodes` is passed, it should be an object mapping type names
-  // to either `null`, to delete the type of that name, or to a
-  // `NodeType` subclass, to add or replace the node type of that
-  // name.
-  //
-  // Similarly, `marks` can be an object to add, change, or remove
-  // [mark types](#MarkType) in the schema.
-  update(nodes, marks) {
-    return new SchemaSpec(nodes ? overlayObj(this.nodes, nodes) : this.nodes,
-                          marks ? overlayObj(this.marks, marks) : this.marks)
-  }
-}
+// :: ?union<Object<constructor<MarkType>>, OrderedMap<constructor<MarkType>>> #path=SchemaSpec.marks
+// The mark types that exist in this schema.
 
-function overlayObj(base, update) {
-  let copy = copyObj(base)
-  for (let name in update) {
-    let value = update[name]
-    if (value == null) delete copy[name]
-    else copy[name] = value
-  }
-  return copy
-}
+// ;; #path=NodeSpec #kind=interface
+
+// :: constructor<NodeType> #path=NodeSpec.type
+// The `NodeType` class to be used for this node.
+
+// :: ?string #path=NodeSpec.content
+// The content expression for this node, as parsed by
+// `ContentExpr.parse`. When not given, the node does not allow any
+// content.
+
+// :: ?string #path=NodeSpec.group
+// The group or space-separated groups to which this node belongs, as
+// referred to in the content expressions for the schema.
 
 // ;; Each document is based on a single schema, which provides the
 // node and mark types that it is made up of (which, in turn,
@@ -571,25 +393,30 @@ export class Schema {
   // :: (SchemaSpec)
   // Construct a schema from a specification.
   constructor(spec) {
-    // :: SchemaSpec
-    // The specification on which the schema is based.
-    this.spec = spec
+    // :: OrderedMap<NodeSpec> The node specs that the schema is based on.
+    this.nodeSpec = OrderedMap.from(spec.nodes)
+    // :: OrderedMap<constructor<MarkType>> The mark spec that the schema is based on.
+    this.markSpec = OrderedMap.from(spec.marks)
 
     // :: Object<NodeType>
     // An object mapping the schema's node names to node type objects.
-    this.nodes = NodeType.compile(spec.nodes, this)
+    this.nodes = NodeType.compile(this.nodeSpec, this)
     // :: Object<MarkType>
     // A map from mark names to mark type objects.
-    this.marks = MarkType.compile(spec.marks, this)
-    for (let prop in this.nodes)
-      if (prop in this.marks) throw new RangeError(prop + " can not be both a node and a mark")
+    this.marks = MarkType.compile(this.markSpec, this)
+    for (let prop in this.nodes) {
+      if (prop in this.marks)
+        throw new RangeError(prop + " can not be both a node and a mark")
+      let type = this.nodes[prop]
+      type.contentExpr = ContentExpr.parse(type, this.nodeSpec.get(prop).content || "", this.nodeSpec)
+    }
 
     // :: Object
     // An object for storing whatever values modules may want to
     // compute and cache per schema. (If you want to store something
     // in it, try to use property names unlikely to clash.)
     this.cached = Object.create(null)
-    this.cached.connections = Object.create(null)
+    this.cached.wrappings = Object.create(null)
 
     this.node = this.node.bind(this)
     this.text = this.text.bind(this)
@@ -625,20 +452,6 @@ export class Schema {
   // Schema. Empty text nodes are not allowed.
   text(text, marks) {
     return this.nodes.text.create(null, text, Mark.setFrom(marks))
-  }
-
-  // :: () → ?NodeType
-  // Return the default textblock type for this schema, or `null` if
-  // it does not contain a node type with a `defaultTextblock`
-  // property.
-  defaultTextblockType() {
-    let cached = this.cached.defaultTextblockType
-    if (cached !== undefined) return cached
-    for (let name in this.nodes) {
-      if (this.nodes[name].defaultTextblock)
-        return this.cached.defaultTextblockType = this.nodes[name]
-    }
-    return this.cached.defaultTextblockType = null
   }
 
   // :: (string, ?Object) → Mark

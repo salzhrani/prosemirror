@@ -1,58 +1,17 @@
-import {MarkType, Fragment} from "../model"
+import {MarkType, Slice} from "../model"
 
 import {Transform} from "./transform"
-import {Step, StepResult} from "./step"
-
-// !!
-// **`addMark`**
-//   : Add the `Mark` given as the step's parameter to all
-//     inline content between `from` and `to` (when allowed).
-//
-// **`removeMark`**
-//   : Remove the `Mark` given as the step's parameter from all inline
-//     content between `from` and `to`.
-
-function mapNode(node, f, parent) {
-  if (node.content.size) node = node.copy(mapFragment(node.content, f, node))
-  if (node.isInline) node = f(node, parent)
-  return node
-}
-
-function mapFragment(fragment, f, parent) {
-  let mapped = []
-  for (let i = 0; i < fragment.childCount; i++)
-    mapped.push(mapNode(fragment.child(i), f, parent))
-  return Fragment.fromArray(mapped)
-}
-
-Step.define("addMark", {
-  apply(doc, step) {
-    let slice = doc.slice(step.from, step.to), $pos = doc.resolve(step.from)
-    slice.content = mapFragment(slice.content, (node, parent) => {
-      if (!parent.type.canContainMark(step.param.type)) return node
-      return node.mark(step.param.addToSet(node.marks))
-    }, $pos.node($pos.depth - slice.openLeft))
-    return StepResult.fromReplace(doc, step.from, step.to, slice)
-  },
-  invert(step) {
-    return new Step("removeMark", step.from, step.to, step.param)
-  },
-  paramToJSON(param) {
-    return param.toJSON()
-  },
-  paramFromJSON(schema, json) {
-    return schema.markFromJSON(json)
-  }
-})
+import {AddMarkStep, RemoveMarkStep} from "./mark_step"
+import {ReplaceStep} from "./replace_step"
 
 // :: (number, number, Mark) → Transform
 // Add the given mark to the inline content between `from` and `to`.
 Transform.prototype.addMark = function(from, to, mark) {
   let removed = [], added = [], removing = null, adding = null
-  this.doc.nodesBetween(from, to, (node, pos, parent) => {
+  this.doc.nodesBetween(from, to, (node, pos, parent, index) => {
     if (!node.isInline) return
     let marks = node.marks
-    if (mark.isInSet(marks) || !parent.type.canContainMark(mark.type)) {
+    if (mark.isInSet(marks) || !parent.contentMatchAt(index + 1).allowsMark(mark.type)) {
       adding = removing = null
     } else {
       let start = Math.max(pos, from), end = Math.min(pos + node.nodeSize, to)
@@ -60,15 +19,15 @@ Transform.prototype.addMark = function(from, to, mark) {
 
       if (!rm)
         removing = null
-      else if (removing && removing.param.eq(rm))
+      else if (removing && removing.mark.eq(rm))
         removing.to = end
       else
-        removed.push(removing = new Step("removeMark", start, end, rm))
+        removed.push(removing = new RemoveMarkStep(start, end, rm))
 
       if (adding)
         adding.to = end
       else
-        added.push(adding = new Step("addMark", start, end, mark))
+        added.push(adding = new AddMarkStep(start, end, mark))
     }
   })
 
@@ -76,25 +35,6 @@ Transform.prototype.addMark = function(from, to, mark) {
   added.forEach(s => this.step(s))
   return this
 }
-
-Step.define("removeMark", {
-  apply(doc, step) {
-    let slice = doc.slice(step.from, step.to)
-    slice.content = mapFragment(slice.content, node => {
-      return node.mark(step.param.removeFromSet(node.marks))
-    })
-    return StepResult.fromReplace(doc, step.from, step.to, slice)
-  },
-  invert(step) {
-    return new Step("addMark", step.from, step.to, step.param)
-  },
-  paramToJSON(param) {
-    return param.toJSON()
-  },
-  paramFromJSON(schema, json) {
-    return schema.markFromJSON(json)
-  }
-})
 
 // :: (number, number, ?union<Mark, MarkType>) → Transform
 // Remove the given mark, or all marks of the given type, from inline
@@ -130,28 +70,42 @@ Transform.prototype.removeMark = function(from, to, mark = null) {
       }
     }
   })
-  matched.forEach(m => this.step("removeMark", m.from, m.to, m.style))
+  matched.forEach(m => this.step(new RemoveMarkStep(m.from, m.to, m.style)))
   return this
 }
 
-// :: (number, number, ?NodeType) → Transform
-// Remove all marks and non-text inline nodes, or if `newParent` is
-// given, all marks and inline nodes that may not appear as content of
-// `newParent`, from the given range.
-Transform.prototype.clearMarkup = function(from, to, newParent) {
+// :: (number, number) → Transform
+// Remove all marks and non-text inline nodes from the given range.
+Transform.prototype.clearMarkup = function(from, to) {
   let delSteps = [] // Must be accumulated and applied in inverse order
   this.doc.nodesBetween(from, to, (node, pos) => {
     if (!node.isInline) return
-    if (newParent ? !newParent.canContainType(node.type) : !node.type.isText) {
-      delSteps.push(new Step("replace", pos, pos + node.nodeSize))
+    if (!node.type.isText) {
+      delSteps.push(new ReplaceStep(pos, pos + node.nodeSize, Slice.empty))
       return
     }
-    for (let i = 0; i < node.marks.length; i++) {
-      let mark = node.marks[i]
-      if (!newParent || !newParent.canContainMark(mark.type))
-        this.step("removeMark", Math.max(pos, from), Math.min(pos + node.nodeSize, to), mark)
-    }
+    for (let i = 0; i < node.marks.length; i++)
+      this.step(new RemoveMarkStep(Math.max(pos, from), Math.min(pos + node.nodeSize, to), node.marks[i]))
   })
+  for (let i = delSteps.length - 1; i >= 0; i--) this.step(delSteps[i])
+  return this
+}
+
+Transform.prototype.clearMarkupFor = function(pos, newType, newAttrs) {
+  let node = this.doc.nodeAt(pos), match = newType.contentExpr.start(newAttrs)
+  let delSteps = []
+  for (let i = 0, cur = pos + 1; i < node.childCount; i++) {
+    let child = node.child(i), end = cur + child.nodeSize
+    let allowed = match.matchType(child.type, child.attrs, [])
+    if (!allowed) {
+      delSteps.push(new ReplaceStep(cur, end, Slice.empty))
+    } else {
+      match = allowed
+      for (let j = 0; j < child.marks.length; j++) if (!match.allowsMark(child.marks[j]))
+        this.step(new RemoveMarkStep(cur, end, child.marks[j]))
+    }
+    cur = end
+  }
   for (let i = delSteps.length - 1; i >= 0; i--) this.step(delSteps[i])
   return this
 }
