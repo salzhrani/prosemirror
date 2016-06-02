@@ -1,7 +1,4 @@
-import {defaultSchema} from "../model"
-import {ParamPrompt} from "../ui/prompt"
-
-import {CommandSet, updateCommands} from "./command"
+import {baseKeymap} from "./keymap"
 
 // An option encapsulates functionality for an editor instance,
 // e.g. the amount of history events that the editor should hold
@@ -19,29 +16,23 @@ class Option {
 
 const options = Object.create(null)
 
-// :: (string, any, ?(pm: ProseMirror, newValue: any, oldValue: any, init: bool), bool)
+// : (string, any, ?(pm: ProseMirror, newValue: any, oldValue: any, init: bool), bool)
 // Define a new option. The `update` handler will be called with the
 // option's old and new value every time the option is
 // [changed](#ProseMirror.setOption). When `updateOnInit` is false, it
 // will not be called on editor init, otherwise it is called with null as the old value,
 // and a fourth argument of true.
-export function defineOption(name, defaultValue, update, updateOnInit) {
+function defineOption(name, defaultValue, update, updateOnInit) {
   options[name] = new Option(defaultValue, update, updateOnInit)
 }
 
 // :: Schema #path=schema #kind=option
 // The [schema](#Schema) that the editor's document should use.
-defineOption("schema", defaultSchema)
+defineOption("schema", null, false)
 
-// :: any #path=doc #kind=option
-// The starting document. Usually a `Node`, but can be in another
-// format when the `docFormat` option is also specified.
+// :: Node #path=doc #kind=option
+// The starting document.
 defineOption("doc", null, (pm, value) => pm.setDoc(value), false)
-
-// :: ?string #path=docFormat #kind=option
-// The format in which the `doc` option is given. Defaults to `null`
-// (a raw `Node`).
-defineOption("docFormat", null)
 
 // :: ?union<DOMNode, (DOMNode)> #path=place #kind=option
 // Determines the placement of the editor in the page. When `null`,
@@ -72,17 +63,9 @@ defineOption("scrollThreshold", 0)
 // surpassed. Defaults to 5.
 defineOption("scrollMargin", 5)
 
-// :: CommandSet #path=commands #kind=option
-// Specifies the set of [commands](#Command) available in the editor
-// (which in turn determines the base key bindings and items available
-// in the menus). Defaults to `CommandSet.default`.
-defineOption("commands", CommandSet.default, updateCommands)
-
-// :: ParamPrompt #path=commandParamPrompt #kind=option
-// A default [parameter prompting](#ui/prompt) class to use when a
-// command is [executed](#ProseMirror.execCommand) without providing
-// parameters.
-defineOption("commandParamPrompt", ParamPrompt)
+// :: Keymap #path=keymap #kind=option
+// Sets the base keymap for the editor. Defaults to `baseKeymap`.
+defineOption("keymap", baseKeymap)
 
 // :: ?string #path=label #kind=option
 // The label of the editor. When set, the editable DOM node gets an
@@ -94,6 +77,8 @@ defineOption("label", null)
 // When set, should be a function that takes a string as argument and returns
 // a string, i.e. :: (string) → string
 defineOption("translate", null) // FIXME create a way to explicitly force a menu redraw
+
+defineOption("plugins", [], false)
 
 export function parseOptions(obj) {
   let result = Object.create(null)

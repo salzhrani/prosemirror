@@ -4,12 +4,11 @@
 // and interact with when using the editor.
 
 export {ProseMirror} from "./main"
-export {defineOption} from "./options"
 export {Selection, TextSelection, NodeSelection} from "./selection"
 export {MarkedRange} from "./range"
-export {CommandSet, Command} from "./command"
-export {baseCommands} from "./base_commands"
-import "./schema_commands"
+export {baseKeymap, defaultEnter} from "./keymap"
+export {Plugin} from "./plugin"
+import * as commands from "./commands"
+export {commands}
 
-import Keymap from "browserkeymap"
-export {Keymap}
+export {default as Keymap} from "browserkeymap"

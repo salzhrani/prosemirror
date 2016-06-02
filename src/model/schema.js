@@ -6,120 +6,36 @@ import {ContentExpr} from "./content"
 import {copyObj} from "../util/obj"
 import {OrderedMap} from "../util/orderedmap"
 
-// ;; The [node](#NodeType) and [mark](#MarkType) types
-// that make up a schema have several things in common—they support
-// attributes, and you can [register](#SchemaItem.register) values
-// with them. This class implements this functionality, and acts as a
-// superclass to those `NodeType` and `MarkType`.
-class SchemaItem {
-  // :: Object<Attribute>
-  // The set of attributes to associate with each node or mark of this
-  // type.
-  get attrs() { return {} }
-
-  // :: (Object<?Attribute>)
-  // Add or remove attributes from this type. Expects an object
-  // mapping names to either attributes (to add) or null (to remove
-  // the attribute by that name).
-  static updateAttrs(attrs) {
-    Object.defineProperty(this.prototype, "attrs", {value: overlayObj(this.prototype.attrs, attrs)})
+// For node types where all attrs have a default value (or which don't
+// have any attributes), build up a single reusable default attribute
+// object, and use it for all nodes that don't specify specific
+// attributes.
+function defaultAttrs(attrs) {
+  let defaults = Object.create(null)
+  for (let attrName in attrs) {
+    let attr = attrs[attrName]
+    if (attr.default === undefined) return null
+    defaults[attrName] = attr.default
   }
-
-  // For node types where all attrs have a default value (or which don't
-  // have any attributes), build up a single reusable default attribute
-  // object, and use it for all nodes that don't specify specific
-  // attributes.
-  getDefaultAttrs() {
-    let defaults = Object.create(null)
-    for (let attrName in this.attrs) {
-      let attr = this.attrs[attrName]
-      if (attr.default === undefined) return null
-      defaults[attrName] = attr.default
-    }
-    return defaults
-  }
-
-  computeAttrs(attrs) {
-    let built = Object.create(null)
-    for (let name in this.attrs) {
-      let value = attrs && attrs[name]
-      if (value == null) {
-        let attr = this.attrs[name]
-        if (attr.default !== undefined)
-          value = attr.default
-        else if (attr.compute)
-          value = attr.compute(this)
-        else
-          throw new RangeError("No value supplied for attribute " + name)
-      }
-      built[name] = value
-    }
-    return built
-  }
-
-  freezeAttrs() {
-    let frozen = Object.create(null)
-    for (let name in this.attrs) frozen[name] = this.attrs[name]
-    Object.defineProperty(this, "attrs", {value: frozen})
-  }
-
-  static getRegistry() {
-    if (this == SchemaItem) return null
-    if (!this.prototype.hasOwnProperty("registry"))
-      this.prototype.registry = Object.create(Object.getPrototypeOf(this).getRegistry())
-    return this.prototype.registry
-  }
-
-  static getNamespace(name) {
-    if (this == SchemaItem) return null
-    let reg = this.getRegistry()
-    if (!Object.prototype.hasOwnProperty.call(reg, name))
-      reg[name] = Object.create(Object.getPrototypeOf(this).getNamespace(name))
-    return reg[name]
-  }
-
-  // :: (string, string, *)
-  // Register a value in this type's registry. Various components use
-  // `Schema.registry` to query values from the marks and nodes that
-  // make up the schema. The `namespace`, for example
-  // [`"command"`](#commands), determines which component will see
-  // this value. `name` is a name specific to this value. Its meaning
-  // differs per namespace.
-  //
-  // Subtypes inherit the registered values from their supertypes.
-  // They can override individual values by calling this method to
-  // overwrite them with a new value, or with `null` to disable them.
-  static register(namespace, name, value) {
-    this.getNamespace(namespace)[name] = () => value
-  }
-
-  // :: (string, string, (SchemaItem) → *)
-  // Register a value in this types's registry, like
-  // [`register`](#SchemaItem.register), but providing a function that
-  // will be called with the actual node or mark type, whose return
-  // value will be treated as the effective value (or will be ignored,
-  // if `null`).
-  static registerComputed(namespace, name, f) {
-    this.getNamespace(namespace)[name] = f
-  }
-
-  // :: (string)
-  // By default, schema items inherit the
-  // [registered](#SchemaItem.register) items from their superclasses.
-  // Call this to disable that behavior for the given namespace.
-  static cleanNamespace(namespace) {
-    this.getNamespace(namespace).__proto__ = null
-  }
+  return defaults
 }
 
-function overlayObj(base, update) {
-  let copy = copyObj(base)
-  for (let name in update) {
-    let value = update[name]
-    if (value == null) delete copy[name]
-    else copy[name] = value
+function computeAttrs(attrs, value) {
+  let built = Object.create(null)
+  for (let name in attrs) {
+    let given = value && value[name]
+    if (given == null) {
+      let attr = attrs[name]
+      if (attr.default !== undefined)
+        given = attr.default
+      else if (attr.compute)
+        given = attr.compute()
+      else
+        throw new RangeError("No value supplied for attribute " + name)
+    }
+    built[name] = given
   }
-  return copy
+  return built
 }
 
 // ;; Node types are objects allocated once per `Schema`
@@ -128,16 +44,15 @@ function overlayObj(base, update) {
 // the node type (its name, its allowed attributes, methods for
 // serializing it to various formats, information to guide
 // deserialization, and so on).
-export class NodeType extends SchemaItem {
+export class NodeType {
   constructor(name, schema) {
-    super()
     // :: string
     // The name the node type has in this schema.
     this.name = name
     // Freeze the attributes, to avoid calling a potentially expensive
     // getter all the time.
-    this.freezeAttrs()
-    this.defaultAttrs = this.getDefaultAttrs()
+    Object.defineProperty(this, "attrs", {value: copyObj(this.attrs)})
+    this.defaultAttrs = defaultAttrs(this.attrs)
     this.contentExpr = null
     // :: Schema
     // A link back to the `Schema` the node type belongs to.
@@ -195,7 +110,7 @@ export class NodeType extends SchemaItem {
 
   computeAttrs(attrs) {
     if (!attrs && this.defaultAttrs) return this.defaultAttrs
-    else return super.computeAttrs(attrs)
+    else return computeAttrs(this.attrs, attrs)
   }
 
   // :: (?Object, ?union<Fragment, Node, [Node]>, ?[Mark]) → Node
@@ -209,25 +124,43 @@ export class NodeType extends SchemaItem {
     return new Node(this, this.computeAttrs(attrs), Fragment.from(content), Mark.setFrom(marks))
   }
 
+  // :: (?Object, ?union<Fragment, Node, [Node]>, ?[Mark]) → Node
+  // Like [`create`](NodeType.create), but check the given content
+  // against the node type's content restrictions, and throw an error
+  // if it doesn't match.
+  createChecked(attrs, content, marks) {
+    attrs = this.computeAttrs(attrs)
+    content = Fragment.from(content)
+    if (!this.validContent(content, attrs))
+      throw new RangeError("Invalid content for node " + this.name)
+    return new Node(this, attrs, content, Mark.setFrom(marks))
+  }
+
+  // :: (?Object, ?union<Fragment, Node, [Node]>, ?[Mark]) → ?Node
+  // Like [`create`](NodeType.create), but see if it is necessary to
+  // add nodes to the start or end of the given fragment to make it
+  // fit the node. If no fitting wrapping can be found, return null.
+  // Note that, due to the fact that required nodes can always be
+  // created, this will always succeed if you pass null or
+  // `Fragment.empty` as content.
+  createAndFill(attrs, content, marks) {
+    attrs = this.computeAttrs(attrs)
+    content = Fragment.from(content)
+    if (content.size) {
+      let before = this.contentExpr.start(attrs).fillBefore(content)
+      if (!before) return null
+      content = before.append(content)
+    }
+    let after = this.contentExpr.getMatchAt(attrs, content).fillBefore(Fragment.empty, true)
+    if (!after) return null
+    return new Node(this, attrs, content.append(after), Mark.setFrom(marks))
+  }
+
   // :: (Fragment, ?Object) → bool
   // Returns true if the given fragment is valid content for this node
   // type.
   validContent(content, attrs) {
     return this.contentExpr.matches(attrs, content)
-  }
-
-  // :: (Fragment, ?Object) → ?Fragment
-  // Verify whether the given fragment would be valid content for this
-  // node type, and if not, try to insert content before and/or after
-  // it to make it valid. Returns null if no valid fragment could be
-  // created.
-  fixContent(content = Fragment.empty, attrs) {
-    let before = this.contentExpr.start(attrs).fillBefore(content)
-    if (!before) return null
-    content = before.append(content)
-    let after = this.contentExpr.getMatchAt(attrs, content).fillBefore(Fragment.empty, true)
-    if (!after) return
-    return content.append(after)
   }
 
   static compile(nodes, schema) {
@@ -244,11 +177,7 @@ export class NodeType extends SchemaItem {
 // ;; Base type for block nodetypes.
 export class Block extends NodeType {
   get isBlock() { return true }
-}
-
-// ;; Base type for textblock node types.
-export class Textblock extends Block {
-  get isTextblock() { return true }
+  get isTextblock() { return this.contentExpr.inlineContent }
 }
 
 // ;; Base type for inline node types.
@@ -264,6 +193,7 @@ export class Text extends Inline {
   create(attrs, content, marks) {
     return new TextNode(this, this.computeAttrs(attrs), content, marks)
   }
+  toDOM(node) { return node.text }
 }
 
 // Attribute descriptors
@@ -282,12 +212,8 @@ export class Attribute {
   //   : The default value for this attribute, to choose when no
   //     explicit value is provided.
   //
-  // **`compute`**`: ?(Fragment) → any`
-  //   : A function that computes a default value for the attribute from
-  //     the node's content.
-  //
-  // **`label`**`: ?string`
-  //   : A user-readable text label associated with the attribute.
+  // **`compute`**`: ?() → any`
+  //   : A function that computes a default value for the attribute.
   //
   // Attributes that have no default or compute property must be
   // provided whenever a node or mark of a type that has them is
@@ -295,7 +221,6 @@ export class Attribute {
   constructor(options = {}) {
     this.default = options.default
     this.compute = options.compute
-    this.label = options.label
   }
 
   get isRequired() {
@@ -308,18 +233,17 @@ export class Attribute {
 // ;; Like nodes, marks (which are associated with nodes to signify
 // things like emphasis or being part of a link) are tagged with type
 // objects, which are instantiated once per `Schema`.
-export class MarkType extends SchemaItem {
+export class MarkType {
   constructor(name, rank, schema) {
-    super()
     // :: string
     // The name of the mark type.
     this.name = name
-    this.freezeAttrs()
+    Object.defineProperty(this, "attrs", {value: copyObj(this.attrs)})
     this.rank = rank
     // :: Schema
     // The schema that this mark type instance is part of.
     this.schema = schema
-    let defaults = this.getDefaultAttrs()
+    let defaults = defaultAttrs(this.attrs)
     this.instance = defaults && new Mark(this, defaults)
   }
 
@@ -334,7 +258,7 @@ export class MarkType extends SchemaItem {
   // they have defaults, will be added.
   create(attrs) {
     if (!attrs && this.instance) return this.instance
-    return new Mark(this, this.computeAttrs(attrs))
+    return new Mark(this, computeAttrs(this.attrs, attrs))
   }
 
   static compile(marks, schema) {
@@ -444,7 +368,7 @@ export class Schema {
     else if (type.schema != this)
       throw new RangeError("Node type from different schema used (" + type.name + ")")
 
-    return type.create(attrs, content, marks)
+    return type.createChecked(attrs, content, marks)
   }
 
   // :: (string, ?[Mark]) → Node
@@ -489,23 +413,5 @@ export class Schema {
     let found = this.nodes[name]
     if (!found) throw new RangeError("Unknown node type: " + name)
     return found
-  }
-
-  // :: (string, (name: string, value: *, source: union<NodeType, MarkType>, name: string))
-  // Retrieve all registered items under the given name from this
-  // schema. The given function will be called with the name, each item, the
-  // element—node type or mark type—that it was associated with, and
-  // that element's name in the schema.
-  registry(namespace, f) {
-    for (let i = 0; i < 2; i++) {
-      let obj = i ? this.marks : this.nodes
-      for (let tname in obj) {
-        let type = obj[tname], registry = type.registry, ns = registry && registry[namespace]
-        if (ns) for (let prop in ns) {
-          let value = ns[prop](type)
-          if (value != null) f(prop, value, type, tname)
-        }
-      }
-    }
   }
 }

@@ -1,4 +1,4 @@
-import "../../collab"
+import {collabEditing} from "../../collab"
 
 import {doc, p} from "../build"
 import {defTest} from "../tests"
@@ -12,30 +12,32 @@ class DummyServer {
   }
 
   attach(pm) {
-    pm.mod.collab.on("mustSend", () => this.mustSend(pm, pm.mod.collab.clientID))
+    let mod = collabEditing.get(pm)
+    mod.on("mustSend", () => this.mustSend(pm, mod.clientID))
     this.pms.push(pm)
   }
 
   mustSend(pm, clientID) {
-    if (pm.mod.collab.frozen) return
-    let toSend = pm.mod.collab.sendableSteps()
+    let mod = collabEditing.get(pm)
+    if (mod.frozen) return
+    let toSend = mod.sendableSteps()
     this.send(pm, toSend.version, toSend.steps, clientID)
   }
 
   send(_pm, _version, steps, clientID) {
     this.version += steps.length
     for (let i = 0; i < this.pms.length; i++)
-      this.pms[i].mod.collab.receive(steps, steps.map(() => clientID))
+      collabEditing.get(this.pms[i]).receive(steps, steps.map(() => clientID))
   }
 }
 
 // Kludge to prevent an editor from sending its changes for a moment
 function delay(pm, f) {
-  pm.mod.collab.frozen = true
+  let mod = collabEditing.get(pm)
+  mod.frozen = true
   f()
-  pm.mod.collab.frozen = false
-  if (pm.mod.collab.hasSendableSteps())
-    pm.mod.collab.signal("mustSend")
+  mod.frozen = false
+  if (mod.hasSendableSteps()) mod.signal("mustSend")
 }
 
 function test(name, f, options, n) {
@@ -43,8 +45,9 @@ function test(name, f, options, n) {
     let server = new DummyServer
     let optArray = []
     for (let i = 0; i < (n || 2); i++) {
-      let copy = {collab: {version: server.version}}
+      let copy = {}
       for (var prop in options) copy[prop] = options[prop]
+      copy.plugins = (copy.plugins || []).concat(collabEditing.config({version: server.version}))
       optArray.push(copy)
     }
     let pms = tempEditors(optArray)
@@ -110,7 +113,7 @@ test("undo_basic", (pm1, pm2) => {
   type(pm1, "A")
   type(pm2, "B")
   type(pm1, "C")
-  pm2.execCommand("undo")
+  pm2.history.undo()
   conv(pm1, pm2, "AC")
   type(pm2, "D")
   type(pm1, "E")
@@ -121,8 +124,8 @@ test("redo_basic", (pm1, pm2) => {
   type(pm1, "A")
   type(pm2, "B")
   type(pm1, "C")
-  pm2.execCommand("undo")
-  pm2.execCommand("redo")
+  pm2.history.undo()
+  pm2.history.redo()
   type(pm2, "D")
   type(pm1, "E")
   conv(pm1, pm2, "ABCDE")
@@ -141,19 +144,19 @@ test("undo_deep", (pm1, pm2) => {
   cut(pm1)
   type(pm1, "*")
   type(pm2, "*")
-  pm1.execCommand("undo")
+  pm1.history.undo()
   conv(pm1, pm2, doc(p("hello! ..."), p("bye! ,,,*")))
-  pm1.execCommand("undo")
-  pm1.execCommand("undo")
+  pm1.history.undo()
+  pm1.history.undo()
   conv(pm1, pm2, doc(p("hello"), p("bye! ,,,*")))
-  pm1.execCommand("redo")
-  pm1.execCommand("redo")
-  pm1.execCommand("redo")
+  pm1.history.redo()
+  pm1.history.redo()
+  pm1.history.redo()
   conv(pm1, pm2, doc(p("hello! ...*"), p("bye! ,,,*")))
-  pm1.execCommand("undo")
-  pm1.execCommand("undo")
+  pm1.history.undo()
+  pm1.history.undo()
   conv(pm1, pm2, doc(p("hello!"), p("bye! ,,,*")))
-  pm2.execCommand("undo")
+  pm2.history.undo()
   conv(pm1, pm2, doc(p("hello!"), p("bye")))
 }, {doc: doc(p("hello"), p("bye"))})
 
@@ -167,7 +170,7 @@ test("undo_deleted_event", (pm1, pm2) => {
     pm2.apply(pm2.tr.delete(2, 5))
   })
   conv(pm1, pm2, "DhoA")
-  pm1.execCommand("undo")
+  pm1.history.undo()
   conv(pm1, pm2, "ho")
   cmp(pm1.selection.head, 3)
 }, {doc: doc(p("hello"))})

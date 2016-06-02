@@ -8,21 +8,29 @@ const XLINK = "http://www.w3.org/1999/xlink"
 
 const prefix = "ProseMirror-icon"
 
-export function getIcon(name, data) {
+function hashPath(path) {
+  let hash = 0
+  for (let i = 0; i < path.length; i++)
+    hash = (((hash << 5) - hash) + path.charCodeAt(i)) | 0
+  return hash
+}
+
+export function getIcon(icon) {
   let node = document.createElement("div")
   node.className = prefix
   if (false) {
-    if (!svgBuilt[name]) buildSVG(name, data)
+    let name = "pm-icon-" + hashPath(icon.path).toString(16)
+    if (!svgBuilt[name]) buildSVG(name, icon)
     let svg = node.appendChild(document.createElementNS(SVG, "svg"))
-    svg.style.width = (data.width / data.height) + "em"
+    svg.style.width = (icon.width / icon.height) + "em"
     let use = svg.appendChild(document.createElementNS(SVG, "use"))
-    use.setAttributeNS(XLINK, "href", /([^#]*)/.exec(document.location)[1] + "#pm-icon-" + name)
-  } else if (data.dom) {
-    node.appendChild(data.dom.cloneNode(true))
+    use.setAttributeNS(XLINK, "href", /([^#]*)/.exec(document.location)[1] + "#" + name)
+  } else if (icon.dom) {
+    node.appendChild(icon.dom.cloneNode(true))
   } else {
     node.appendChild(document.createElement("span")).textContent = data.text || ''
     node.setAttribute('data-name', name);
-    if (data.style) node.firstChild.style.cssText = data.style
+    if (icon.css) node.firstChild.style.cssText = data.style
   }
   return node
 }
@@ -34,7 +42,7 @@ function buildSVG(name, data) {
     document.body.insertBefore(svgCollection, document.body.firstChild)
   }
   let sym = document.createElementNS(SVG, "symbol")
-  sym.id = "pm-icon-" + name
+  sym.id = name
   sym.setAttribute("viewBox", "0 0 " + data.width + " " + data.height)
   let path = sym.appendChild(document.createElementNS(SVG, "path"))
   path.setAttribute("d", data.path)
