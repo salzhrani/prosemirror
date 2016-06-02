@@ -61,6 +61,16 @@ Transform.prototype.lift = function(from, to = from, silent = false) {
 
   let {depth, shared, unwrap} = liftable
 
+  if (unwrap) {
+    let parent = $from.node(shared), pos = $to.after(shared + 1)
+    for (let i = $to.indexAfter(shared); pos > from; i--) {
+      let size = parent.child(i - 1).nodeSize
+      this.lift(pos - size + 1, pos - 1, silent)
+      pos -= size
+    }
+    return this
+  }
+
   let gapStart = $from.before(shared + 1), gapEnd = $to.after(shared + 1)
   let start = gapStart, end = gapEnd
 
@@ -83,20 +93,6 @@ Transform.prototype.lift = function(from, to = from, silent = false) {
       end++
     }
 
-  if (unwrap) {
-    let joinPos = gapStart, parent = $from.node(shared)
-    for (let i = $from.index(shared), e = $to.index(shared) + 1, first = true; i < e; i++, first = false) {
-      if (!first) {
-        this.join(joinPos)
-        end -= 2
-        gapEnd -= 2
-      }
-      joinPos += parent.child(i).nodeSize - (first ? 0 : 2)
-    }
-    ++gapStart
-    --gapEnd
-  }
-
   return this.step(new ReplaceAroundStep(start, end, gapStart, gapEnd,
                                          new Slice(before.append(after), beforeDepth, afterDepth),
                                          before.size - beforeDepth, true))
@@ -112,14 +108,19 @@ export function canWrap(doc, from, to, type, attrs) {
 function checkWrap($from, $to, type, attrs) {
   let shared = rangeDepth($from, $to)
   if (shared == null) return null
-  let parent = $from.node(shared)
-  let around = parent.contentMatchAt($from.index(shared)).findWrapping(type, attrs)
+  let parent = $from.node(shared), parentFrom = $from.index(shared), parentTo = $to.indexAfter(shared)
+  let around = parent.contentMatchAt(parentFrom).findWrapping(type, attrs)
   if (!around) return null
-  if (!parent.canReplaceWith($from.index(shared), $to.indexAfter(shared), around.length ? around[0].type : type,
+  if (!parent.canReplaceWith(parentFrom, parentTo, around.length ? around[0].type : type,
                              around.length ? around[0].attrs : attrs)) return null
-  let inner = parent.child($from.index(shared))
+  let inner = parent.child(parentFrom)
   let inside = type.contentExpr.start(attrs || type.defaultAttrs).findWrapping(inner.type, inner.attrs)
-  if (around && inside) return {shared, around, inside}
+  if (!inside) return null
+  let lastInside = inside[inside.length - 1]
+  let innerMatch = (lastInside ? lastInside.type : type).contentExpr.start(lastInside ? lastInside.attrs : attrs)
+  for (let i = parentFrom; i < parentTo; i++)
+    if (!(innerMatch = innerMatch.matchNode(parent.child(i)))) return null
+  return {shared, around, inside}
 }
 
 // :: (number, ?number, NodeType, ?Object) → Transform
@@ -134,7 +135,7 @@ Transform.prototype.wrap = function(from, to = from, type, wrapAttrs) {
 
   let content = Fragment.empty, open = inside.length + 1 + around.length
   for (let i = inside.length - 1; i >= 0; i--) content = Fragment.from(inside[i].type.create(inside[i].attrs, content))
-  content = Fragment.from(type.create(wrapAttrs, content))
+  content = Fragment.from(content.size ? type.createChecked(wrapAttrs, content) : type.create(wrapAttrs))
   for (let i = around.length - 1; i >= 0; i--) content = Fragment.from(around[i].type.create(around[i].attrs, content))
 
   let start = $from.before(shared + 1), end = $to.after(shared + 1)
@@ -268,4 +269,27 @@ Transform.prototype.join = function(pos, depth = 1, silent = false) {
   if (silent) this.maybeStep(step)
   else this.step(step)
   return this
+}
+
+// :: (Node, number, NodeType, ?Object) → ?number
+// Try to find a point where a node of the given type can be inserted
+// near `pos`, by searching up the node hierarchy when `pos` itself
+// isn't a valid place but is at the start or end of a node. Return
+// null if no position was found.
+export function insertPoint(doc, pos, nodeType, attrs) {
+  let $pos = doc.resolve(pos)
+  if ($pos.parent.canReplaceWith($pos.index(), $pos.index(), nodeType, attrs)) return pos
+
+  if ($pos.parentOffset == 0)
+    for (let d = $pos.depth - 1; d >= 0; d--) {
+      let index = $pos.index(d)
+      if ($pos.node(d).canReplaceWith(index, index, nodeType, attrs)) return $pos.before(d + 1)
+      if (index > 0) return null
+    }
+  if ($pos.parentOffset == $pos.parent.content.size)
+    for (let d = $pos.depth - 1; d >= 0; d--) {
+      let index = $pos.indexAfter(d)
+      if ($pos.node(d).canReplaceWith(index, index, nodeType, attrs)) return $pos.after(d + 1)
+      if (index < $pos.node(d).childCount) return null
+    }
 }

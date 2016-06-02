@@ -1,15 +1,27 @@
 var ProseMirror = require("../dist/edit").ProseMirror
-require("../dist/inputrules/autoinput")
-require("../dist/menu/tooltipmenu")
-require("../dist/menu/menubar")
+var fromDOM = require("../dist/htmlformat").fromDOM
+var schema = require("../dist/schema").defaultSchema
+var inputRules = require("../dist/inputrules")
+var defaultRules = require("../dist/schema/inputrules").defaultRules
+var menuBar = require("../dist/menu/menubar").menuBar
+var tooltipMenu = require("../dist/menu/tooltipmenu").tooltipMenu
+var schemaMenu = require("../dist/schema/menu")
+var schemaKeys = require("../dist/schema/keymap")
+var defaultStyle = require("../dist/schema/style").defaultSchemaStyle
+
+var menu = schemaMenu.defaultMenuItems(schema)
 
 var pm = window.pm = new ProseMirror({
   place: document.querySelector(".full"),
-  autoInput: true,
-  tooltipMenu: {selectedBlockMenu: true},
-  menuBar: {float: true},
-  doc: document.querySelector("#content"),
-  docFormat: "dom"
+  doc: fromDOM(schema, document.querySelector("#content")),
+  schema: schema,
+  plugins: [menuBar.config({float: true, content: menu.fullMenu}),
+            tooltipMenu.config({selectedBlockMenu: true,
+                                inlineContent: menu.inlineMenu,
+                                blockContent: menu.blockMenu}),
+            inputRules.inputRules.config({rules: inputRules.all.concat(defaultRules(schema))}),
+            schemaKeys.defaultSchemaKeymapPlugin,
+            defaultStyle]
 })
 
 document.querySelector("#mark").addEventListener("mousedown", function(e) {

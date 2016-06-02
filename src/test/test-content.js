@@ -1,5 +1,5 @@
 import {ContentExpr} from "../model/content"
-import {defaultSchema as schema} from "../model"
+import {defaultSchema as schema} from "../schema"
 
 import {defTest} from "./tests"
 import {doc, p, pre, img, br, h1, h2, em, hr} from "./build"
@@ -89,7 +89,7 @@ function parseFail(name, expr) {
 }
 
 parseFail("invalid_char", "paragraph/image")
-parseFail("adjacent", "paragraph paragraph")
+parseFail("adjacent", "paragraph? paragraph")
 parseFail("adjacent_set", "inline image")
 parseFail("bad_attr", "hard_break{.foo}")
 parseFail("bad_node", "foo+")

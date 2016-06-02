@@ -1,4 +1,5 @@
-import {defaultSchema as schema, Node} from "../model"
+import {defaultSchema as schema} from "../schema"
+import {Node} from "../model"
 
 // This file defines a set of helpers for building up documents to be
 // used in the test suite. You can say, for example, `doc(p("foo"))`
@@ -57,7 +58,7 @@ function id(x) { return x }
 function block(type, attrs) {
   return function() {
     let {nodes, tag} = flatten(arguments, id)
-    let node = schema.node(type, attrs, nodes)
+    let node = schema.nodes[type].create(attrs, nodes)
     if (tag != noTag) node.tag = tag
     return node
   }
