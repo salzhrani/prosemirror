@@ -1,10 +1,8 @@
-import Keymap from "browserkeymap"
-import {HardBreak, BulletList, OrderedList, ListItem, BlockQuote, HorizontalRule,
-        Paragraph, CodeBlock, Heading, StrongMark, EmMark, CodeMark} from "../schema"
-import {browser} from "../dom"
-import {wrapIn, setBlockType, wrapInList, splitListItem, liftListItem, sinkListItem,
-        chain, newlineInCode} from "../edit/commands"
-import {Plugin} from "../edit"
+const Keymap = require("browserkeymap")
+const {HardBreak, BulletList, OrderedList, ListItem, BlockQuote, HorizontalRule, Paragraph, CodeBlock, Heading, StrongMark, EmMark, CodeMark} = require("../schema")
+const browser = require("../util/browser")
+const {wrapIn, setBlockType, wrapInList, splitListItem, liftListItem, sinkListItem, chain, newlineInCode} = require("../edit/commands")
+const {Plugin} = require("../edit")
 
 // :: (Schema) → Keymap
 // Inspect the given schema looking for marks and nodes from the
@@ -25,7 +23,7 @@ import {Plugin} from "../edit"
 //   the same time splitting the list item
 // * **Ctrl/Cmd-Enter** to insert a hard break
 // * **Ctrl/Cmd-Shift-minus** to insert a horizontal rule
-export function defaultSchemaKeymap(schema) {
+function defaultSchemaKeymap(schema) {
   let keys = {}
   for (let name in schema.marks) {
     let mark = schema.marks[name]
@@ -39,38 +37,39 @@ export function defaultSchemaKeymap(schema) {
   for (let name in schema.nodes) {
     let node = schema.nodes[name]
     if (node instanceof BulletList)
-      keys["Shift-Ctrl-8"] = pm => wrapInList(pm, node)
+      keys["Shift-Ctrl-8"] = wrapInList(node)
     if (node instanceof OrderedList)
-      keys["Shift-Ctrl-9"] = pm => wrapInList(pm, node)
+      keys["Shift-Ctrl-9"] = wrapInList(node)
     if (node instanceof BlockQuote)
-      keys["Shift-Ctrl-."] = pm => wrapIn(pm, node)
+      keys["Shift-Ctrl-."] = wrapIn(node)
     if (node instanceof HardBreak) {
       let cmd = chain(newlineInCode,
-                      pm => pm.tr.replaceSelection(node.create()).apply(pm.apply.scroll))
+                      pm => pm.tr.replaceSelection(node.create()).applyAndScroll())
       keys["Mod-Enter"] = keys["Shift-Enter"] = cmd
       if (browser.mac) keys["Ctrl-Enter"] = cmd
     }
     if (node instanceof ListItem) {
-      keys["Enter"] = pm => splitListItem(pm, node)
-      keys["Mod-["] = pm => liftListItem(pm, node)
-      keys["Mod-]"] = pm => sinkListItem(pm, node)
+      keys["Enter"] = splitListItem(node)
+      keys["Mod-["] = liftListItem(node)
+      keys["Mod-]"] = sinkListItem(node)
     }
     if (node instanceof Paragraph)
-      keys["Shift-Ctrl-0"] = pm => setBlockType(pm, node)
+      keys["Shift-Ctrl-0"] = setBlockType(node)
     if (node instanceof CodeBlock)
-      keys["Shift-Ctrl-\\"] = pm => setBlockType(pm, node)
+      keys["Shift-Ctrl-\\"] = setBlockType(node)
     if (node instanceof Heading) for (let i = 1; i <= 6; i++)
-      keys["Shift-Ctrl-" + i] = pm => setBlockType(pm, node, {level: i})
+      keys["Shift-Ctrl-" + i] = setBlockType(node, {level: i})
     if (node instanceof HorizontalRule)
-      keys["Mod-Shift--"] = pm => pm.tr.replaceSelection(node.create()).apply(pm.apply.scroll)
+      keys["Mod-Shift--"] = pm => pm.tr.replaceSelection(node.create()).applyAndScroll()
   }
   return new Keymap(keys)
 }
+exports.defaultSchemaKeymap = defaultSchemaKeymap
 
 // :: Plugin
 // A convenience plugin to automatically add a keymap created by
 // `defaultSchemaKeymap` to an editor.
-export const defaultSchemaKeymapPlugin = new Plugin(class {
+const defaultSchemaKeymapPlugin = new Plugin(class {
   constructor(pm) {
     this.keymap = defaultSchemaKeymap(pm.schema)
     pm.addKeymap(this.keymap)
@@ -79,3 +78,4 @@ export const defaultSchemaKeymapPlugin = new Plugin(class {
     pm.removeKeymap(this.keymap)
   }
 })
+exports.defaultSchemaKeymapPlugin = defaultSchemaKeymapPlugin

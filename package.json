@@ -26,18 +26,16 @@
     "blint": "^0.5.0",
     "jsdom": "^8.0.4",
     "moduleserve": "^0.7.0",
-    "distfs": "^0.1.1",
     "punycode": "^1.4.0",
     "rimraf": "^2.5.0",
     "source-map-support": "^0.2.10"
   },
   "scripts": {
     "test": "node dist/test/run.js",
-    "demo": "moduleserve demo",
-    "distfs": "mkdir -p dist && distfs src dist",
+    "demo": "moduleserve demo --port 9090",
     "dist": "babel -d dist src",
     "dist-watch": "babel -w -d dist src",
     "lint": "blint --browser --ecmaVersion 6 --forbidSemicolons src || true",
-    "prepublish": "rimraf dist && babel -d dist src"
+    "prepublish": "rimraf dist && node_modules/babel-cli/bin/babel.js -d dist src"
   }
 }

@@ -1,4 +1,4 @@
-// import {insertCSS} from "../dom"
+// const {insertCSS} = require("../util/dom")
 
 let svgCollection = null
 const svgBuilt = Object.create(null)
@@ -15,7 +15,7 @@ function hashPath(path) {
   return hash
 }
 
-export function getIcon(icon) {
+function getIcon(icon) {
   let node = document.createElement("div")
   node.className = prefix
   if (false) {
@@ -28,12 +28,13 @@ export function getIcon(icon) {
   } else if (icon.dom) {
     node.appendChild(icon.dom.cloneNode(true))
   } else {
-    node.appendChild(document.createElement("span")).textContent = data.text || ''
+    node.appendChild(document.createElement("span")).textContent = icon && icon.text || ''
     node.setAttribute('data-name', name);
-    if (icon.css) node.firstChild.style.cssText = data.style
+    if (icon.css) node.firstChild.style.cssText = icon.style
   }
   return node
 }
+exports.getIcon = getIcon
 
 function buildSVG(name, data) {
   if (!svgCollection) {
