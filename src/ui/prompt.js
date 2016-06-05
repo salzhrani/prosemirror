@@ -1,4 +1,4 @@
-import {elt, insertCSS} from "../dom"
+const {elt, insertCSS} = require("../util/dom")
 
 // !! The `ui/prompt` module implements functionality for prompting
 // the user for input.
@@ -9,7 +9,7 @@ import {elt, insertCSS} from "../dom"
 
 // ;; This class represents a dialog that prompts for a set of
 // fields.
-export class FieldPrompt {
+class FieldPrompt {
   // :: (ProseMirror, string, [Field])
   // Construct a prompt. Note that this does not
   // [open](#FieldPrompt.open) it yet.
@@ -95,7 +95,7 @@ export class FieldPrompt {
         this.reportInvalid(dom, this.pm.translate(bad))
         return null
       }
-      result[name] = value
+      result[name] = field.clean(value)
     }
     return result
   }
@@ -117,9 +117,10 @@ export class FieldPrompt {
     setTimeout(() => parent.removeChild(msg), 1500)
   }
 }
+exports.FieldPrompt = FieldPrompt
 
 // ;; The type of field that `FieldPrompt` expects to be passed to it.
-export class Field {
+class Field {
   // :: (Object)
   // Create a field with the given options. Options support by all
   // field types are:
@@ -154,10 +155,15 @@ export class Field {
       return "Required field"
     return this.validateType(value) || (this.options.validate && this.options.validate(value))
   }
+
+  clean(value) {
+    return this.options.clean ? this.options.clean(value) : value
+  }
 }
+exports.Field = Field
 
 // ;; A field class for single-line text fields.
-export class TextField extends Field {
+class TextField extends Field {
   render(pm) {
     return elt("input", {type: "text",
                          placeholder: pm.translate(this.options.label),
@@ -165,13 +171,14 @@ export class TextField extends Field {
                          autocomplete: "off"})
   }
 }
+exports.TextField = TextField
 
 
 // ;; A field class for dropdown fields based on a plain `<select>`
 // tag. Expects an option `options`, which should be an array of
 // `{value: string, label: string}` objects, or a function taking a
 // `ProseMirror` instance and returning such an array.
-export class SelectField extends Field {
+class SelectField extends Field {
   render(pm) {
     let opts = this.options
     let options = opts.options.call ? opts.options(pm) : opts.options
@@ -179,6 +186,7 @@ export class SelectField extends Field {
                                                     pm.translate(o.label))))
   }
 }
+exports.SelectField = SelectField
 
 // :: (ProseMirror, DOMNode, ?Object) → {close: ()}
 // Open a dialog box for the given editor, putting `content` inside of
@@ -192,7 +200,7 @@ export class SelectField extends Field {
 //
 // **`onClose`**`: fn()`
 //   : A function to be called when the dialog is closed.
-export function openPrompt(pm, content, options) {
+function openPrompt(pm, content, options) {
   let button = elt("button", {class: "ProseMirror-prompt-close"})
   let wrapper = elt("div", {class: "ProseMirror-prompt"}, content, button)
   let outerBox = pm.wrapper.getBoundingClientRect()
@@ -220,6 +228,7 @@ export function openPrompt(pm, content, options) {
   pm.on("interaction", close)
   return {close}
 }
+exports.openPrompt = openPrompt
 
 insertCSS(`
 .ProseMirror-prompt {

@@ -1,10 +1,10 @@
-import {defTest} from "../tests"
-import {tempEditor} from "./def"
-import {cmpNode} from "../cmp"
-import {doc, blockquote, pre, h1, h2, p, li, ol, ul, em, hr} from "../build"
+const {defTest} = require("../tests")
+const {tempEditor} = require("./def")
+const {cmpNode} = require("../cmp")
+const {doc, blockquote, pre, h1, h2, p, li, ol, ul, em, hr} = require("../build")
 
-import {commands} from "../../edit"
-import {defaultSchema as schema} from "../../schema"
+const {commands} = require("../../edit")
+const {defaultSchema: schema} = require("../../schema")
 
 const used = Object.create(null)
 const n = schema.nodes
@@ -13,7 +13,8 @@ function test(cmd, ...args) {
   let known = used[cmd] || 0
   defTest("command_" + cmd + "_" + known, () => {
     let pm = tempEditor({doc: args[args.length - 2]})
-    commands[cmd](pm, ...args.slice(0, args.length - 2))
+    let prep = args.slice(0, args.length - 2)
+    ;(prep.length ? commands[cmd](...prep) : commands[cmd])(pm)
     cmpNode(pm.doc, args[args.length - 1])
   })
   used[cmd] = known + 1
@@ -324,8 +325,8 @@ test("sinkListItem", n.list_item,
      doc(ul(li(p("o<a><b>ne")), li(p("two")), li(p("three")))),
      doc(ul(li(p("one")), li(p("two")), li(p("three")))))
 test("sinkListItem", n.list_item,
-     doc(ul(li(p("one")), li(ul(li(p("two")))), li(p("t<a><b>hree")))),
-     doc(ul(li(p("one")), li(ul(li(p("two")), li(p("three")))))))
+     doc(ul(li(p("one")), li(p("..."), ul(li(p("two")))), li(p("t<a><b>hree")))),
+     doc(ul(li(p("one")), li(p("..."), ul(li(p("two")), li(p("three")))))))
 
 test("liftEmptyBlock",
      doc(blockquote(p("foo"), p("<a>"), p("bar"))),
