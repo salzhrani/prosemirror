@@ -1,34 +1,34 @@
 const {joinPoint, joinable, findWrapping, liftTarget, canSplit, ReplaceAroundStep} = require("../transform")
-const {Slice, Fragment, NodeRange} = require("../model")
+const {Slice, Fragment} = require("../model")
 const browser = require("../util/browser")
+const Keymap = require("browserkeymap")
+const {charCategory, isExtendingChar} = require("../util/char")
+const {Selection, TextSelection, NodeSelection} = require("../edit")
 
-const {charCategory, isExtendingChar} = require("./char")
-const {findSelectionFrom, TextSelection, NodeSelection} = require("./selection")
-
-// !! This module defines a number of ‘commands‘, functions that take
+// !! This module exports a number of ‘commands‘, functions that take
 // a ProseMirror instance and try to perform some action on it,
 // returning `false` if they don't apply. These are used to bind keys
 // to, and to define [menu items](#menu).
 //
-// Some of the command functions defined here take a second, optional,
+// Most of the command functions defined here take a second, optional,
 // boolean parameter. This can be set to `false` to do a ‘dry run’,
 // where the function won't take any actual action, but will return
 // information about whether it applies.
 
-// :: (...(ProseMirror) → bool) → (ProseMirror) → bool
+// :: (...[(ProseMirror, ?bool) → bool]) → (ProseMirror, ?bool) → bool
 // Combine a number of command functions into a single function (which
 // calls them one by one until one returns something other than
 // `false`).
-function chain(...functions) {
-  return function(pm) {
-    for (let i = 0; i < functions.length; i++) {
-      let val = functions[i](pm)
+function chainCommands(...commands) {
+  return function(pm, apply) {
+    for (let i = 0; i < commands.length; i++) {
+      let val = commands[i](pm, apply)
       if (val !== false) return val
     }
     return false
   }
 }
-exports.chain = chain
+exports.chainCommands = chainCommands
 
 // :: (ProseMirror, ?bool) → bool
 // Delete the selection, if there is one.
@@ -245,12 +245,12 @@ exports.newlineInCode = newlineInCode
 // If a block node is selected, create an empty paragraph before (if
 // it is its parent's first child) or after it.
 function createParagraphNear(pm, apply) {
-  let {$from, from, to, node} = pm.selection
+  let {$from, $to, node} = pm.selection
   if (!node || !node.isBlock) return false
-  let type = $from.parent.defaultContentType($from.indexAfter())
-  if (!type.isTextblock) return false
+  let type = $from.parent.defaultContentType($to.indexAfter())
+  if (!type || !type.isTextblock) return false
   if (apply !== false) {
-    let side = $from.parentOffset ? to : from
+    let side = ($from.parentOffset ? $to : $from).pos
     let tr = pm.tr.insert(side, type.createAndFill())
     tr.setSelection(new TextSelection(tr.doc.resolve(side + 1)))
     tr.applyAndScroll()
@@ -292,8 +292,14 @@ function splitBlock(pm, apply) {
     if (apply === false) return true
     let atEnd = $to.parentOffset == $to.parent.content.size
     let tr = pm.tr.delete($from.pos, $to.pos)
-    let deflt = $from.node(-1).defaultContentType($from.indexAfter(-1)), type = atEnd ? deflt : null
-    if (canSplit(tr.doc, $from.pos, 1, type)) {
+    let deflt = $from.depth == 0 ? null : $from.node(-1).defaultContentType($from.indexAfter(-1))
+    let type = atEnd ? deflt : null
+    let can = canSplit(tr.doc, $from.pos, 1, type)
+    if (!type && !can && canSplit(tr.doc, $from.pos, 1, deflt)) {
+      type = deflt
+      can = true
+    }
+    if (can) {
       tr.split($from.pos, 1, type)
       if (!atEnd && !$from.parentOffset && $from.parent.type != deflt)
         tr.setNodeType($from.before(), deflt)
@@ -325,7 +331,7 @@ exports.selectParentNode = selectParentNode
 // :: (ProseMirror, ?bool) → bool
 // Undo the most recent change event, if any.
 function undo(pm, apply) {
-  if (pm.history.undoDepth == 0) return false
+  if (!pm.history || pm.history.undoDepth == 0) return false
   if (apply !== false) {
     pm.scrollIntoView()
     pm.history.undo()
@@ -337,7 +343,7 @@ exports.undo = undo
 // :: (ProseMirror, ?bool) → bool
 // Redo the most recently undone change event, if any.
 function redo(pm, apply) {
-  if (pm.history.redoDepth == 0) return false
+  if (!pm.history || pm.history.redoDepth == 0) return false
   if (apply !== false) {
     pm.scrollIntoView()
     pm.history.redo()
@@ -367,7 +373,7 @@ function deleteBarrier(pm, cut, apply) {
       .applyAndScroll()
     return true
   } else {
-    let selAfter = findSelectionFrom($cut, 1)
+    let selAfter = Selection.findFrom($cut, 1)
     let range = selAfter.$from.blockRange(selAfter.$to), target = range && liftTarget(range)
     if (target == null) return false
     if (apply !== false) pm.tr.lift(range, target).applyAndScroll()
@@ -479,10 +485,11 @@ function setBlockType(nodeType, attrs) {
     if (node) {
       depth = $from.depth
     } else {
-      if ($to.pos > $from.end()) return false
+      if (!$from.depth || $to.pos > $from.end()) return false
       depth = $from.depth - 1
     }
-    if ((node || $from.parent).hasMarkup(nodeType, attrs)) return false
+    let target = node || $from.parent
+    if (!target.isTextblock || target.hasMarkup(nodeType, attrs)) return false
     let index = $from.index(depth)
     if (!$from.node(depth).canReplaceWith(index, index + 1, nodeType)) return false
     if (apply !== false) {
@@ -496,103 +503,85 @@ function setBlockType(nodeType, attrs) {
 }
 exports.setBlockType = setBlockType
 
-// List-related commands
+function markApplies(doc, from, to, type) {
+  let can = false
+  doc.nodesBetween(from, to, node => {
+    if (can) return false
+    can = node.isTextblock && node.contentMatchAt(0).allowsMark(type)
+  })
+  return can
+}
 
-// :: (NodeType, ?Object) → (pm: ProseMirror, apply: ?bool) → bool
-// Returns a command function that wraps the selection in a list with
-// the given type an attributes. If `apply` is `false`, only return a
-// value to indicate whether this is possible, but don't actually
-// perform the change.
-function wrapInList(nodeType, attrs) {
+// :: (MarkType, ?Object) → (pm: ProseMirror, apply: ?bool) → bool
+// Create a command function that toggles the given mark with the
+// given attributes. Will return `false` when the current selection
+// doesn't support that mark. If `apply` is not `false`, it will
+// remove the mark if any marks of that type exist in the selection,
+// or add it otherwise. If the selection is empty, this applies to the
+// [active marks](#ProseMirror.activeMarks) instead of a range of the
+// document.
+function toggleMark(markType, attrs) {
   return function(pm, apply) {
-    let {$from, $to} = pm.selection
-    let range = $from.blockRange($to), doJoin = false
-    // This is at the top of an existing list item
-    if (range.depth >= 2 && $from.node(range.depth - 1).type.compatibleContent(nodeType) && range.startIndex == 0) {
-      // Don't do anything if this is the top of the list
-      if ($from.index(range.depth - 1) == 0) return false
-      doJoin = true
-    }
-    if (apply !== false) {
-      let tr = pm.tr
-      if (doJoin) {
-        tr.join($from.before(range.depth))
-        range = tr.doc.resolveNoCache($from.pos - 2).blockRange(tr.doc.resolveNoCache($to.pos - 2))
-      }
-      tr.wrap(range, findWrapping(range, nodeType, attrs)).applyAndScroll()
+    let {empty, from, to} = pm.selection
+    if (!markApplies(pm.doc, from, to, markType)) return false
+    if (apply === false) return true
+    if (empty) {
+      if (markType.isInSet(pm.activeMarks()))
+        pm.removeActiveMark(markType)
+      else
+        pm.addActiveMark(markType.create(attrs))
+    } else {
+      if (pm.doc.rangeHasMark(from, to, markType))
+        pm.tr.removeMark(from, to, markType).applyAndScroll()
+      else
+        pm.tr.addMark(from, to, markType.create(attrs)).applyAndScroll()
     }
     return true
   }
 }
-exports.wrapInList = wrapInList
+exports.toggleMark = toggleMark
 
-// :: (NodeType) → (pm: ProseMirror) → bool
-// Build a command that splits a non-empty textblock at the top level
-// of a list item by also splitting that list item.
-function splitListItem(nodeType) {
-  return function(pm) {
-    let {$from, $to, node} = pm.selection
-    if ((node && node.isBlock) || !$from.parent.content.size ||
-        $from.depth < 2 || !$from.sameParent($to)) return false
-    let grandParent = $from.node(-1)
-    if (grandParent.type != nodeType) return false
-    let nextType = $to.pos == $from.end() ? grandParent.defaultContentType($from.indexAfter(-1)) : null
-    let tr = pm.tr.delete($from.pos, $to.pos)
-    if (!canSplit(tr.doc, $from.pos, 2, nextType)) return false
-    tr.split($from.pos, 2, nextType).applyAndScroll()
-    return true
-  }
-}
-exports.splitListItem = splitListItem
+// :: Keymap
+// A basic keymap containing bindings not specific to any schema.
+// Binds the following keys (when multiple commands are listed, they
+// are chained with [`chainCommands`](#commands.chainCommands):
+//
+// * **Enter** to `newlineInCode`, `createParagraphNear`, `liftEmptyBlock`, `splitBlock`
+// * **Backspace** to `deleteSelection`, `joinBackward`, `deleteCharBefore`
+// * **Mod-Backspace** to `deleteSelection`, `joinBackward`, `deleteWordBefore`
+// * **Delete** to `deleteSelection`, `joinForward`, `deleteCharAfter`
+// * **Mod-Delete** to `deleteSelection`, `joinForward`, `deleteWordAfter`
+// * **Alt-Up** to `joinUp`
+// * **Alt-Down** to `joinDown`
+// * **Mod-[** to `lift`
+// * **Esc** to `selectParentNode`
+// * **Mod-Z** to `undo`
+// * **Mod-Y** and **Shift-Mod-Z** to `redo`
+let baseKeymap = new Keymap({
+  "Enter": chainCommands(newlineInCode, createParagraphNear, liftEmptyBlock, splitBlock),
 
-// :: (NodeType) → (pm: ProseMirror, apply: ?bool) → bool
-// Create a command to lift the list item around the selection up into
-// a wrapping list.
-function liftListItem(nodeType) {
-  return function(pm, apply) {
-    let {$from, $to} = pm.selection
-    let range = $from.blockRange($to, node => node.childCount && node.firstChild.type == nodeType)
-    if (!range || range.depth < 2 || $from.node(range.depth - 1).type != nodeType) return false
-    if (apply !== false) {
-      let tr = pm.tr, end = range.end, endOfList = $to.end(range.depth)
-      if (end < endOfList) {
-        // There are siblings after the lifted items, which must become
-        // children of the last item
-        tr.step(new ReplaceAroundStep(end - 1, endOfList, end, endOfList,
-                                      new Slice(Fragment.from(nodeType.create(null, range.parent.copy())), 1, 0), 1, true))
-        range = new NodeRange(tr.doc.resolveNoCache($from.pos), tr.doc.resolveNoCache(endOfList), range.depth)
-      }
+  "Backspace": chainCommands(deleteSelection, joinBackward, deleteCharBefore),
+  "Mod-Backspace": chainCommands(deleteSelection, joinBackward, deleteWordBefore),
+  "Delete": chainCommands(deleteSelection, joinForward, deleteCharAfter),
+  "Mod-Delete": chainCommands(deleteSelection, joinForward, deleteWordAfter),
 
-      tr.lift(range, liftTarget(range)).applyAndScroll()
-    }
-    return true
-  }
-}
-exports.liftListItem = liftListItem
+  "Alt-Up": joinUp,
+  "Alt-Down": joinDown,
+  "Mod-[": lift,
+  "Esc": selectParentNode,
 
-// :: (NodeType) → (pm: ProseMirror, apply: ?bool) → bool
-// Create a command to sink the list item around the selection down
-// into an inner list.
-function sinkListItem(nodeType) {
-  return function(pm, apply) {
-    let {$from, $to} = pm.selection
-    let range = $from.blockRange($to, node => node.childCount && node.firstChild.type == nodeType)
-    if (!range) return false
-    let startIndex = range.startIndex
-    if (startIndex == 0) return false
-    let parent = range.parent, nodeBefore = parent.child(startIndex - 1)
-    if (nodeBefore.type != nodeType) return false
-    if (apply !== false) {
-      let nestedBefore = nodeBefore.lastChild && nodeBefore.lastChild.type == parent.type
-      let inner = Fragment.from(nestedBefore ? nodeType.create() : null)
-      let slice = new Slice(Fragment.from(nodeType.create(null, Fragment.from(parent.copy(inner)))),
-                            nestedBefore ? 3 : 1, 0)
-      let before = range.start, after = range.end
-      pm.tr.step(new ReplaceAroundStep(before - (nestedBefore ? 3 : 1), after,
-                                       before, after, slice, 1, true))
-        .applyAndScroll()
-    }
-    return true
-  }
-}
-exports.sinkListItem = sinkListItem
+  "Mod-Z": undo,
+  "Mod-Y": redo,
+  "Shift-Mod-Z": redo
+})
+
+if (browser.mac) baseKeymap = baseKeymap.update({
+  "Ctrl-H": baseKeymap.lookup("Backspace"),
+  "Alt-Backspace": baseKeymap.lookup("Mod-Backspace"),
+  "Ctrl-D": baseKeymap.lookup("Delete"),
+  "Ctrl-Alt-Backspace": baseKeymap.lookup("Mod-Delete"),
+  "Alt-Delete": baseKeymap.lookup("Mod-Delete"),
+  "Alt-D": baseKeymap.lookup("Mod-Delete")
+})
+
+exports.baseKeymap = baseKeymap

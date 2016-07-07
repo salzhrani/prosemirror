@@ -1,8 +1,6 @@
 const markdownit = require("markdown-it")
-const {defaultSchema} = require("../schema")
+const {schema} = require("../schema-basic")
 const {Mark} = require("../model")
-
-const noMarks = []
 
 function maybeMerge(a, b) {
   if (a.isText && b.isText && Mark.sameSet(a.marks, b.marks))
@@ -14,7 +12,7 @@ class MarkdownParseState {
   constructor(schema, tokenHandlers) {
     this.schema = schema
     this.stack = [{type: schema.nodes.doc, content: []}]
-    this.marks = noMarks
+    this.marks = Mark.none
     this.tokenHandlers = tokenHandlers
   }
 
@@ -77,7 +75,7 @@ class MarkdownParseState {
   // : () → ?Node
   // Close and return the node that is currently on top of the stack.
   closeNode() {
-    if (this.marks.length) this.marks = noMarks
+    if (this.marks.length) this.marks = Mark.none
     let info = this.stack.pop()
     return this.addNode(info.type, info.attrs, info.content)
   }
@@ -179,12 +177,12 @@ class MarkdownParser {
     return doc
   }
 }
+exports.MarkdownParser = MarkdownParser
 
 // :: MarkdownParser
 // A parser parsing unextended [CommonMark](http://commonmark.org/),
-// without inline HTML, and producing a document in ProseMirror's
-// default schema.
-const defaultMarkdownParser = new MarkdownParser(defaultSchema, markdownit("commonmark", {html: false}), {
+// without inline HTML, and producing a document in the basic schema.
+const defaultMarkdownParser = new MarkdownParser(schema, markdownit("commonmark", {html: false}), {
   blockquote: {block: "blockquote"},
   paragraph: {block: "paragraph"},
   list_item: {block: "list_item"},

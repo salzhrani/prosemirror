@@ -34,16 +34,16 @@ class InputRules {
     this.rules = []
     this.cancelVersion = null
 
-    pm.on("selectionChange", this.onSelChange = () => this.cancelVersion = null)
-    pm.on("textInput", this.onTextInput = this.onTextInput.bind(this))
+    pm.on.selectionChange.add(this.onSelChange = () => this.cancelVersion = null)
+    pm.on.textInput.add(this.onTextInput = this.onTextInput.bind(this))
     pm.addKeymap(new Keymap({Backspace: pm => this.backspace(pm)}, {name: "inputRules"}), 20)
 
     options.rules.forEach(rule => this.addRule(rule))
   }
 
   detach() {
-    this.pm.off("selectionChange", this.onSelChange)
-    this.pm.off("textInput", this.onTextInput)
+    this.pm.on.selectionChange.remove(this.onSelChange)
+    this.pm.on.textInput.remove(this.onTextInput)
     this.pm.removeKeymap("inputRules")
   }
 
@@ -80,7 +80,7 @@ class InputRules {
         if (isCode) return
       }
       if (match = rule.match.exec(textBefore)) {
-        let startVersion = this.pm.history.getVersion()
+        let startVersion = this.pm.history && this.pm.history.getVersion()
         if (typeof rule.handler == "string") {
           let start = $pos.pos - (match[1] || match[0]).length
           let marks = this.pm.doc.marksAt($pos.pos)
@@ -97,7 +97,7 @@ class InputRules {
   }
 
   backspace() {
-    if (this.cancelVersion) {
+    if (this.cancelVersion && this.pm.history) {
       this.pm.history.backToVersion(this.cancelVersion)
       this.cancelVersion = null
     } else {
@@ -125,7 +125,7 @@ function getContext($pos) {
 // instance of the plugin state and add a rule to it.
 //
 // Takes a single option, `rules`, which may be an array of
-// `InputRules` objects to add to initially add.
+// `InputRules` objects to initially add.
 const inputRules = new Plugin(InputRules, {
   rules: []
 })

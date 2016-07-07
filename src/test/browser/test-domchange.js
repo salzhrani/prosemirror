@@ -1,9 +1,17 @@
 const {readInputChange, readCompositionChange} = require("../../edit/domchange")
 
 const {namespace} = require("./def")
-const {doc, p, em, img, strong, blockquote} = require("../build")
-const {cmpNode} = require("../cmp")
+const {doc, p, h1, em, img, strong, blockquote} = require("../build")
+const {cmpNode, cmp} = require("../cmp")
 const {findTextNode} = require("./test-selection")
+
+function setSel(aNode, aOff, fNode, fOff) {
+  let r = document.createRange(), s = window.getSelection()
+  r.setEnd(fNode || aNode, fNode ? fOff : aOff)
+  r.setStart(aNode, aOff)
+  s.removeAllRanges()
+  s.addRange(r)
+}
 
 const test = namespace("domchange", {doc: doc(p("hello"))})
 
@@ -26,7 +34,7 @@ test("remove_ambiguous_text", pm => {
 })
 
 test("active_marks", pm => {
-  pm.setMark(pm.schema.marks.em, null)
+  pm.addActiveMark(pm.schema.marks.em.create())
   findTextNode(pm.content, "hello").nodeValue = "helloo"
   readInputChange(pm)
   cmpNode(pm.doc, doc(p("hello", em("o"))))
@@ -99,9 +107,44 @@ test("composition_type_inside_markup", pm => {
 
 test("composition_type_ambiguous", pm => {
   pm.flush()
-  pm.setMark(pm.schema.marks.strong, null)
+  pm.addActiveMark(pm.schema.marks.strong.create())
   findTextNode(pm.content, "foo").nodeValue = "fooo"
   pm.startOperation()
   readCompositionChange(pm, 0)
   cmpNode(pm.doc, doc(p("fo", strong("o"), "o")))
 }, {doc: doc(p("fo<a>o"))})
+
+test("get_selection", pm => {
+  let textNode = findTextNode(pm.content, "abc")
+  textNode.nodeValue = "abcd"
+  setSel(textNode, 3)
+  readInputChange(pm)
+  cmpNode(pm.doc, doc(p("abcd")))
+  cmp(pm.selection.anchor, 4)
+  cmp(pm.selection.head, 4)
+}, {doc: doc(p("abc<a>"))})
+
+test("crude_split", pm => {
+  pm.flush()
+  let para = pm.content.querySelector("p")
+  let split = para.parentNode.appendChild(para.cloneNode())
+  split.innerHTML = "fg"
+  findTextNode(para, "defg").nodeValue = "dexy"
+  setSel(split.firstChild, 1)
+  readInputChange(pm)
+  cmpNode(pm.doc, doc(h1("abc"), p("dexy"), p("fg")))
+  cmp(pm.selection.anchor, 13)
+}, {doc: doc(h1("abc"), p("defg<a>"))})
+
+test("deep_split", pm => {
+  pm.flush()
+  let quote = pm.content.querySelector("blockquote")
+  let quote2 = pm.content.appendChild(quote.cloneNode(true))
+  findTextNode(quote, "abcd").nodeValue = "abx"
+  let text2 = findTextNode(quote2, "abcd")
+  text2.nodeValue = "cd"
+  setSel(text2.parentNode, 0)
+  readInputChange(pm)
+  cmpNode(pm.doc, doc(blockquote(p("abx")), blockquote(p("cd"))))
+  cmp(pm.selection.anchor, 9)
+}, {doc: doc(blockquote(p("ab<a>cd")))})

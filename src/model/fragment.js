@@ -1,3 +1,6 @@
+const {fragmentToDOM} = require("./to_dom")
+const {findDiffStart, findDiffEnd} = require("./diff")
+
 // ;; Fragment is the type used to represent a node's collection of
 // child nodes.
 //
@@ -31,7 +34,7 @@ class Fragment {
     }
   }
 
-  // :: (number, number, string) → string
+  // : (number, number, string) → string
   textBetween(from, to, separator) {
     let text = "", separated = true
     this.nodesBetween(from, to, (node, pos) => {
@@ -189,21 +192,45 @@ class Fragment {
     return found
   }
 
+  // :: (number) → number
+  // Get the offset at (size of children before) the given index.
+  offsetAt(index) {
+    let offset = 0
+    for (let i = 0; i < index; i++) offset += this.content[i].nodeSize
+    return offset
+  }
+
   // :: (number) → ?Node
   // Get the child node at the given index, if it exists.
   maybeChild(index) {
     return this.content[index]
   }
 
-  // :: ((node: Node, offset: number))
-  // Call `f` for every child node, passing the node and its offset
-  // into this parent node.
+  // :: ((node: Node, offset: number, index: number))
+  // Call `f` for every child node, passing the node, its offset
+  // into this parent node, and its index.
   forEach(f) {
     for (let i = 0, p = 0; i < this.content.length; i++) {
       let child = this.content[i]
-      f(child, p)
+      f(child, p, i)
       p += child.nodeSize
     }
+  }
+
+  // :: (Fragment) → ?number
+  // Find the first position at which this fragment and another
+  // fragment differ, or `null` if they are the same.
+  findDiffStart(other, pos = 0) {
+    return findDiffStart(this, other, pos)
+  }
+
+  // :: (Node) → ?{a: number, b: number}
+  // Find the first position, searching from the end, at which this
+  // fragment and the given fragment differ, or `null` if they are the
+  // same. Since this position will not be the same in both nodes, an
+  // object with two separate positions is returned.
+  findDiffEnd(other, pos = this.size, otherPos = other.size) {
+    return findDiffEnd(this, other, pos, otherPos)
   }
 
   // : (number, ?number) → {index: number, offset: number}
@@ -223,6 +250,17 @@ class Fragment {
       curPos = end
     }
   }
+
+  // :: (?Object) → DOMFragment
+  // Serialize the content of this fragment to a DOM fragment. When
+  // not in the browser, the `document` option, containing a DOM
+  // document, should be passed so that the serialize can create
+  // nodes.
+  //
+  // To specify rendering behavior for your own [node](#NodeType) and
+  // [mark](#MarkType) types, define a [`toDOM`](#NodeType.toDOM)
+  // method on them.
+  toDOM(options = {}) { return fragmentToDOM(this, options) }
 }
 exports.Fragment = Fragment
 

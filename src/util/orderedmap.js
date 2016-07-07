@@ -59,6 +59,16 @@ class OrderedMap {
     return new OrderedMap(content)
   }
 
+  // :: (string, string, any) → OrderedMap
+  // Add a key after the given key. If `place` is not found, the new
+  // key is added to the end.
+  addBefore(place, key, value) {
+    let without = this.remove(key), content = without.content.slice()
+    let found = without.find(place)
+    content.splice(found == -1 ? content.length : found, 0, key, value)
+    return new OrderedMap(content)
+  }
+
   // :: ((key: string, value: any))
   // Call the given function for each key/value pair in the map, in
   // order.
@@ -71,8 +81,8 @@ class OrderedMap {
   // Create a new map by prepending the keys in this map that don't
   // appear in `map` before the keys in `map`.
   prepend(map) {
-    if (!map.size) return this
     map = OrderedMap.from(map)
+    if (!map.size) return this
     return new OrderedMap(map.content.concat(this.subtract(map).content))
   }
 
@@ -80,8 +90,8 @@ class OrderedMap {
   // Create a new map by appending the keys in this map that don't
   // appear in `map` after the keys in `map`.
   append(map) {
-    if (!map.size) return this
     map = OrderedMap.from(map)
+    if (!map.size) return this
     return new OrderedMap(this.subtract(map).content.concat(map.content))
   }
 

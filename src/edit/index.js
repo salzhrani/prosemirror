@@ -6,8 +6,6 @@
 exports.ProseMirror = require("./main").ProseMirror
 ;({Selection: exports.Selection, TextSelection: exports.TextSelection, NodeSelection: exports.NodeSelection} = require("./selection"))
 ;({MarkedRange: exports.MarkedRange} = require("./range"))
-;({baseKeymap: exports.baseKeymap, defaultEnter: exports.defaultEnter} = require("./keymap"))
 ;({Plugin: exports.Plugin} = require("./plugin"))
-exports.commands = require("./commands")
 
 exports.Keymap = require("browserkeymap")

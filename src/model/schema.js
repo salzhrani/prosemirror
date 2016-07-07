@@ -2,6 +2,7 @@ const {Node, TextNode} = require("./node")
 const {Fragment} = require("./fragment")
 const {Mark} = require("./mark")
 const {ContentExpr} = require("./content")
+const {parseDOM} = require("./from_dom")
 
 const {copyObj} = require("../util/obj")
 const {OrderedMap} = require("../util/orderedmap")
@@ -59,6 +60,9 @@ class NodeType {
     this.schema = schema
   }
 
+  // :: Object<Attribute> #path=NodeType.prototype.attrs
+  // The attributes for this node type.
+
   // :: bool
   // True if this is a block type.
   get isBlock() { return false }
@@ -77,8 +81,12 @@ class NodeType {
   get isText() { return false }
 
   // :: bool
-  // Controls whether nodes of this type can be selected (as a user
-  // node selection).
+  // True for node types that allow no content.
+  get isLeaf() { return this.contentExpr.isLeaf }
+
+  // :: bool
+  // Controls whether nodes of this type can be selected (as a [node
+  // selection](#NodeSelection)).
   get selectable() { return true }
 
   // :: bool
@@ -89,14 +97,6 @@ class NodeType {
   // transfer](https://developer.mozilla.org/en-US/docs/Web/API/DataTransfer)
   // when dragged.
   get draggable() { return false }
-
-  // :: bool
-  // Controls whether this node type is locked.
-  get locked() { return false }
-
-  // :: bool
-  // True for node types that allow no content.
-  get isLeaf() { return this.contentExpr.isLeaf }
 
   hasRequiredAttrs(ignore) {
     for (let n in this.attrs)
@@ -125,7 +125,7 @@ class NodeType {
   }
 
   // :: (?Object, ?union<Fragment, Node, [Node]>, ?[Mark]) → Node
-  // Like [`create`](NodeType.create), but check the given content
+  // Like [`create`](#NodeType.create), but check the given content
   // against the node type's content restrictions, and throw an error
   // if it doesn't match.
   createChecked(attrs, content, marks) {
@@ -137,7 +137,7 @@ class NodeType {
   }
 
   // :: (?Object, ?union<Fragment, Node, [Node]>, ?[Mark]) → ?Node
-  // Like [`create`](NodeType.create), but see if it is necessary to
+  // Like [`create`](#NodeType.create), but see if it is necessary to
   // add nodes to the start or end of the given fragment to make it
   // fit the node. If no fitting wrapping can be found, return null.
   // Note that, due to the fact that required nodes can always be
@@ -158,7 +158,7 @@ class NodeType {
 
   // :: (Fragment, ?Object) → bool
   // Returns true if the given fragment is valid content for this node
-  // type.
+  // type with the given attributes.
   validContent(content, attrs) {
     return this.contentExpr.matches(attrs, content)
   }
@@ -172,6 +172,23 @@ class NodeType {
 
     return result
   }
+
+  // :: (Node) → DOMOutputSpec
+  // Defines the way a node of this type should be serialized to
+  // DOM/HTML. Should return an [array structure](#DOMOutputSpec) that
+  // describes the resulting DOM structure, with an optional number
+  // zero (“hole”) in it to indicate where the node's content should
+  // be inserted.
+  toDOM(_) { throw new Error("Failed to override NodeType.toDOM") }
+
+  // :: Object<union<ParseSpec, (DOMNode) → union<bool, ParseSpec>>>
+  // Defines the way nodes of this type are parsed. Should, if
+  // present, contain an object mapping CSS selectors (such as `"p"`
+  // for `<p>` tags, or `"div[data-type=foo]"` for `<div>` tags with a
+  // specific attribute) to [parse specs](#ParseSpec) or functions
+  // that, when given a DOM node, return either `false` or a parse
+  // spec.
+  get matchDOMTag() {}
 }
 exports.NodeType = NodeType
 
@@ -288,6 +305,24 @@ class MarkType {
     for (let i = 0; i < set.length; i++)
       if (set[i].type == this) return set[i]
   }
+
+  // :: (mark: Mark) → DOMOutputSpec
+  // Defines the way marks of this type should be serialized to DOM/HTML.
+  toDOM(_) { throw new Error("Failed to override MarkType.toDOM") }
+
+  // :: Object<union<ParseSpec, (DOMNode) → union<bool, ParseSpec>>>
+  // Defines the way marks of this type are parsed. Works just like
+  // `NodeType.matchTag`, but produces marks rather than nodes.
+  get matchDOMTag() {}
+
+  // :: Object<union<?Object, (string) → union<bool, ?Object>>>
+  // Defines the way DOM styles are mapped to marks of this type. Should
+  // contain an object mapping CSS property names, as found in inline
+  // styles, to either attributes for this mark (null for default
+  // attributes), or a function mapping the style's value to either a
+  // set of attributes or `false` to indicate that the style does not
+  // match.
+  get matchDOMStyle() {}
 }
 exports.MarkType = MarkType
 
@@ -308,9 +343,9 @@ exports.MarkType = MarkType
 // The `NodeType` class to be used for this node.
 
 // :: ?string #path=NodeSpec.content
-// The content expression for this node, as parsed by
-// `ContentExpr.parse`. When not given, the node does not allow any
-// content.
+// The content expression for this node, as described in the [schema
+// guide](guide/schema.html). When not given, the node does not allow
+// any content.
 
 // :: ?string #path=NodeSpec.group
 // The group or space-separated groups to which this node belongs, as
@@ -320,13 +355,18 @@ exports.MarkType = MarkType
 // node and mark types that it is made up of (which, in turn,
 // determine the structure it is allowed to have).
 class Schema {
-  // :: (SchemaSpec)
+  // :: (SchemaSpec, ?any)
   // Construct a schema from a specification.
-  constructor(spec) {
+  constructor(spec, data) {
     // :: OrderedMap<NodeSpec> The node specs that the schema is based on.
     this.nodeSpec = OrderedMap.from(spec.nodes)
     // :: OrderedMap<constructor<MarkType>> The mark spec that the schema is based on.
     this.markSpec = OrderedMap.from(spec.marks)
+
+    // :: any A generic field that you can use (by passing a value to
+    // the constructor) to store arbitrary data or references in your
+    // schema object, for use by node- or mark- methods.
+    this.data = data
 
     // :: Object<NodeType>
     // An object mapping the schema's node names to node type objects.
@@ -419,6 +459,15 @@ class Schema {
     let found = this.nodes[name]
     if (!found) throw new RangeError("Unknown node type: " + name)
     return found
+  }
+
+  // :: (DOMNode, ?Object) → Node
+  // Parse a document from the content of a DOM node. To provide an
+  // explicit parent document (for example, when not in a browser
+  // window environment, where we simply use the global document),
+  // pass it as the `document` property of `options`.
+  parseDOM(dom, options = {}) {
+    return parseDOM(this, dom, options)
   }
 }
 exports.Schema = Schema

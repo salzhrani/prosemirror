@@ -1,6 +1,7 @@
 const {Plugin} = require("../edit")
 const {elt/*, insertCSS*/} = require("../util/dom")
-const {Tooltip} = require("../ui/tooltip")
+const {Tooltip} = require("../tooltip")
+
 
 const {renderGrouped} = require("./menu")
 
@@ -12,7 +13,12 @@ class TooltipMenu {
     this.config = config
 
     this.selectedBlockMenu = this.config.selectedBlockMenu
-    this.updater = pm.updateScheduler("change selectionChange blur focus commandsChanged", () => this.update())
+    this.updater = pm.updateScheduler([
+      pm.on.change,
+      pm.on.selectionChange,
+      pm.on.blur,
+      pm.on.focus
+    ], () => this.update())
     this.onContextMenu = this.onContextMenu.bind(this)
     pm.content.addEventListener("contextmenu", this.onContextMenu)
 
@@ -100,11 +106,11 @@ class TooltipMenu {
   onContextMenu(e) {
     if (!this.pm.selection.empty) return
     let pos = this.pm.posAtCoords({left: e.clientX, top: e.clientY})
-    if (!pos || !pos.isValid(this.pm.doc, true)) return
+    if (!pos || !this.pm.doc.resolve(pos).parent.isTextblock) return
 
     this.pm.setTextSelection(pos, pos)
     this.pm.flush()
-    this.show(this.inlineContent, this.selectionCoords())
+    this.show(this.config.inlineContent, this.selectionCoords())
   }
 }
 

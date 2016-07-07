@@ -16,9 +16,18 @@ class Transform {
   // :: (Node)
   // Create a transformation that starts with the given document.
   constructor(doc) {
+    // :: Node
+    // The current document (the result of applying the steps in the
+    // transform).
     this.doc = doc
-    this.docs = []
+    // :: [Step]
+    // The steps in this transform.
     this.steps = []
+    // :: [Node]
+    // The documents before each of the steps.
+    this.docs = []
+    // :: [PosMap]
+    // The position maps for each of the steps in this transform.
     this.maps = []
   }
 
@@ -35,8 +44,8 @@ class Transform {
   }
 
   // :: (Step) → StepResult
-  // Apply a new step in this transformation, returning the step
-  // result.
+  // Try to apply a step in this transformation, ignoring it if it
+  // fails. Returns the step result.
   maybeStep(step) {
     let result = step.apply(this.doc)
     if (!result.failed) {

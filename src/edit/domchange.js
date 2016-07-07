@@ -1,9 +1,8 @@
-const {findDiffStart, findDiffEnd, Mark} = require("../model")
-const {fromDOM} = require("../htmlformat")
-const {mapThroughResult} = require("../transform/map")
+const {Mark} = require("../model")
+const {mapThroughResult} = require("../transform")
 
-const {findSelectionFrom, selectionFromDOM} = require("./selection")
-const {DOMFromPos} = require("./dompos")
+const {Selection, TextSelection} = require("./selection")
+const {DOMFromPos, DOMFromPosFromEnd} = require("./dompos")
 
 function readInputChange(pm) {
   pm.ensureOperation({readSelection: false})
@@ -24,7 +23,8 @@ exports.readCompositionChange = readCompositionChange
 
 function parseBetween(pm, from, to) {
   let {node: parent, offset: startOff} = DOMFromPos(pm, from, true)
-  let endOff = DOMFromPos(pm, to, true).offset
+  let {node: parentRight, offset: endOff} = DOMFromPosFromEnd(pm, to)
+  if (parent != parentRight) return null
   while (startOff) {
     let prev = parent.childNodes[startOff - 1]
     if (prev.nodeType != 1 || !prev.hasAttribute("pm-offset")) --startOff
@@ -35,13 +35,26 @@ function parseBetween(pm, from, to) {
     if (next.nodeType != 1 || !next.hasAttribute("pm-offset")) ++endOff
     else break
   }
-  return fromDOM(pm.schema, parent, {
-    topNode: pm.doc.resolve(from).parent.copy(),
+  let domSel = window.getSelection(), find = null
+  if (domSel.anchorNode && pm.content.contains(domSel.anchorNode)) {
+    find = [{node: domSel.anchorNode, offset: domSel.anchorOffset}]
+    if (!domSel.isCollapsed)
+      find.push({node: domSel.focusNode, offset: domSel.focusOffset})
+  }
+  let sel = null, doc = pm.schema.parseDOM(parent, {
+    topNode: pm.operation.doc.resolve(from).parent.copy(),
     from: startOff,
     to: endOff,
     preserveWhitespace: true,
-    editableContent: true
+    editableContent: true,
+    findPositions: find
   })
+  if (find && find[0].pos != null) {
+    let anchor = find[0].pos, head = find[1] && find[1].pos
+    if (head == null) head = anchor
+    sel = {anchor, head}
+  }
+  return {doc, sel}
 }
 
 function isAtEnd($pos, depth) {
@@ -102,7 +115,15 @@ function readDOMChange(pm, range) {
     return false
   }
 
-  let parsed = parseBetween(pm, range.from, range.to)
+  let parseResult
+  for (;;) {
+    parseResult = parseBetween(pm, range.from, range.to)
+    if (parseResult) break
+    range = {from: op.doc.resolve(range.from).before(),
+             to: op.doc.resolve(range.to).after()}
+  }
+  let {doc: parsed, sel: parsedSel} = parseResult
+
   let compare = op.doc.slice(range.from, range.to)
   let change = findDiff(compare.content, parsed.content, range.from, op.sel.from)
   if (!change) return false
@@ -113,28 +134,36 @@ function readDOMChange(pm, range) {
   // Mark nodes touched by this change as 'to be redrawn'
   markDirtyFor(pm, op.doc, change.start, change.endA)
 
+  function newSelection(doc) {
+    if (!parsedSel) return false
+    let newSel = Selection.findNear(doc.resolve(range.from + parsedSel.head))
+    if (parsedSel.anchor != parsedSel.head && newSel.$head) {
+      let $anchor = doc.resolve(range.from + parsedSel.anchor)
+      if ($anchor.parent.isTextblock) newSel = new TextSelection($anchor, newSel.$head)
+    }
+    return newSel
+  }
+
   let $from = parsed.resolveNoCache(change.start - range.from)
-  let $to = parsed.resolveNoCache(change.endB - range.from), nextSel, text
+  let $to = parsed.resolveNoCache(change.endB - range.from)
+  let nextSel, text
   // If this looks like the effect of pressing Enter, just dispatch an
   // Enter key instead.
   if (!$from.sameParent($to) && $from.pos < parsed.content.size &&
-      (nextSel = findSelectionFrom(parsed.resolve($from.pos + 1), 1, true)) &&
+      (nextSel = Selection.findFrom(parsed.resolve($from.pos + 1), 1, true)) &&
       nextSel.head == $to.pos) {
     pm.input.dispatchKey("Enter")
   } else if ($from.sameParent($to) && $from.parent.isTextblock &&
              (text = uniformTextBetween(parsed, $from.pos, $to.pos)) != null) {
-    pm.input.insertText(fromMapped.pos, toMapped.pos, text, doc => domSel(pm, doc))
+    pm.input.insertText(fromMapped.pos, toMapped.pos, text, newSelection)
   } else {
     let slice = parsed.slice(change.start - range.from, change.endB - range.from)
     let tr = pm.tr.replace(fromMapped.pos, toMapped.pos, slice)
-    tr.setSelection(domSel(pm, tr.doc))
+    let sel = newSelection(tr.doc)
+    if (sel) tr.setSelection(sel)
     tr.applyAndScroll()
   }
   return true
-}
-
-function domSel(pm, doc) {
-  if (pm.hasFocus()) return selectionFromDOM(pm, doc, null, true).range
 }
 
 function uniformTextBetween(node, from, to) {
@@ -150,9 +179,9 @@ function uniformTextBetween(node, from, to) {
 }
 
 function findDiff(a, b, pos, preferedStart) {
-  let start = findDiffStart(a, b, pos)
+  let start = a.findDiffStart(b, pos)
   if (!start) return null
-  let {a: endA, b: endB} = findDiffEnd(a, b, pos + a.size, pos + b.size)
+  let {a: endA, b: endB} = a.findDiffEnd(b, pos + a.size, pos + b.size)
   if (endA < start) {
     let move = preferedStart <= start && preferedStart >= endA ? start - preferedStart : 0
     start -= move
