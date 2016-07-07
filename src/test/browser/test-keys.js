@@ -36,7 +36,7 @@ test("multi", pm => {
 test("addKeymap", pm => {
   pm.addKeymap(extraMap)
   let map = new Keymap({"Ctrl-A": trace("a2")})
-  pm.addKeymap(map, 10)
+  pm.addKeymap(map, 60)
   dispatch(pm, "Ctrl-A")
   cmp(pm.cached.a, undefined)
   cmp(pm.cached.a2, 1)
@@ -50,8 +50,8 @@ test("addKeymap_bottom", pm => {
   pm.addKeymap(extraMap)
   let mapTop = new Keymap({"Ctrl-A": trace("a2")})
   let mapBot = new Keymap({"Ctrl-A": trace("a3"), "Ctrl-D": trace("d")})
-  pm.addKeymap(mapTop, 10)
-  pm.addKeymap(mapBot, 60)
+  pm.addKeymap(mapTop, 60)
+  pm.addKeymap(mapBot, 40)
   dispatch(pm, "Ctrl-A")
   cmp(pm.cached.a2, 1)
   cmp(pm.cached.a3, undefined)
@@ -65,22 +65,19 @@ test("addKeymap_bottom", pm => {
 defTest("keys_add_inconsistent", () => {
   let map = new Keymap({"Ctrl-A": "foo", "Ctrl-B Ctrl-C": "quux"})
   try {
-    map.addBinding("Ctrl-A", "bar")
-    is(false)
+    map.update({"Ctrl-A Ctrl-X": "baz"})
+    is(false, "overwrote single with multi")
   } catch (e) { if (!/Inconsistent/.test(e.toString())) throw e }
   try {
-    map.addBinding("Ctrl-A Ctrl-X", "baz")
-    is(false)
-  } catch (e) { if (!/Inconsistent/.test(e.toString())) throw e }
-  try {
-    map.addBinding("Ctrl-B", "bak")
-    is(false)
+    map.update({"Ctrl-B": "bak"})
+    is(false, "overwrote prefix")
   } catch (e) { if (!/Inconsistent/.test(e.toString())) throw e }
 })
 
 defTest("keys_add_consistent", () => {
-  let map = new Keymap({"Ctrl-A Ctrl-B": "foo", "Ctrl-A Ctrl-C": "bar"})
-  map.removeBinding("Ctrl-A Ctrl-B")
-  map.removeBinding("Ctrl-A Ctrl-C")
-  map.addBinding("Ctrl-A", "quux")
+  let map = new Keymap({"Ctrl-A Ctrl-B": "foo", "Ctrl-A Ctrl-C": "bar"}).update({
+    "Ctrl-A Ctrl-B": null,
+    "Ctrl-A Ctrl-C": null
+  })
+  map.update({"Ctrl-A": "quux"})
 })

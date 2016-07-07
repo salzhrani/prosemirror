@@ -1,12 +1,5 @@
 const {elt, insertCSS} = require("../util/dom")
 
-// !! The `ui/prompt` module implements functionality for prompting
-// the user for input.
-//
-// The default implementation gets the job done, roughly, but you'll
-// probably want to customize it in your own system (or submit patches
-// to improve this implementation).
-
 // ;; This class represents a dialog that prompts for a set of
 // fields.
 class FieldPrompt {
@@ -14,9 +7,7 @@ class FieldPrompt {
   // Construct a prompt. Note that this does not
   // [open](#FieldPrompt.open) it yet.
   constructor(pm, title, fields) {
-    // :: ProseMirror
     this.pm = pm
-    // :: Command
     this.title = title
     this.fields = fields
     this.doClose = null
@@ -218,14 +209,14 @@ function openPrompt(pm, content, options) {
   }
 
   let close = () => {
-    pm.off("interaction", close)
+    pm.on.interaction.remove(close)
     if (wrapper.parentNode) {
       wrapper.parentNode.removeChild(wrapper)
       if (options && options.onClose) options.onClose()
     }
   }
   button.addEventListener("click", close)
-  pm.on("interaction", close)
+  pm.on.interaction.add(close)
   return {close}
 }
 exports.openPrompt = openPrompt

@@ -39,6 +39,8 @@ function setSel(node, offset) {
 }
 
 test("read", pm => {
+  // disabled when the document doesn't have focus, since that causes this to fail
+  if (!document.hasFocus()) return
   function test(node, offset, expected, comment) {
     setSel(node, offset)
     pm.sel.readFromDOM()
@@ -78,6 +80,8 @@ function getSel() {
 }
 
 test("set", pm => {
+  // disabled when the document doesn't have focus, since that causes this to fail
+  if (!document.hasFocus()) return
   function test(pos, node, offset) {
     pm.setTextSelection(pos)
     pm.flush()
@@ -99,13 +103,13 @@ test("set", pm => {
 
 test("change_event", pm => {
   let received = 0
-  pm.on("selectionChange", () => ++received)
+  pm.on.selectionChange.add(() => ++received)
   pm.setTextSelection(2)
   pm.setTextSelection(2)
   cmp(received, 1, "changed")
   pm.setTextSelection(1)
   cmp(received, 2, "changed back")
-  pm.setOption("doc", doc(p("hi")))
+  pm.setDoc(doc(p("hi")))
   cmp(received, 2, "new doc")
   pm.tr.insertText(3, "you").apply()
   cmp(received, 3, "doc changed")
@@ -180,7 +184,7 @@ test("replace_with_block", pm => {
   pm.setTextSelection(10)
   pm.tr.replaceSelection(pm.schema.node("horizontal_rule")).apply()
   cmpNode(pm.doc, doc(p("foo"), hr, p("bar"), hr), "inserted after")
-  cmp(pm.selection.head, 10, "stayed in paragraph")
+  cmp(pm.selection.from, 11, "selected hr")
 }, {
   doc: doc(p("foobar"))
 })
@@ -191,3 +195,14 @@ test("type_over_hr", pm => {
   cmp(pm.selection.head, 5)
   cmp(pm.selection.anchor, 5)
 }, {doc: doc(p("a"), "<a>", hr, p("b"))})
+
+test("pos_at_coords_after_wrapped", pm => {
+  let top = pm.coordsAtPos(1), pos = 1, end
+  for (;;) {
+    pm.tr.typeText("abc def ghi ").apply()
+    pos += 12
+    end = pm.coordsAtPos(pos)
+    if (end.bottom > top.bottom + 4) break
+  }
+  cmp(pm.posAtCoords({left: end.left + 50, top: end.top + 5}), pos)
+})

@@ -26,8 +26,10 @@ class Mark {
 
   // :: ([Mark]) → [Mark]
   // Given a set of marks, create a new set which contains this one as
-  // well, in the right position. If this mark or another of its type
-  // is already in the set, the set itself is returned.
+  // well, in the right position. If this mark is already in the set,
+  // the set itself is returned. If a mark of this type with different
+  // attributes is already in the set, a set in which it is replaced
+  // by this one is returned.
   addToSet(set) {
     for (var i = 0; i < set.length; i++) {
       var other = set[i]
@@ -85,7 +87,7 @@ class Mark {
   // Create a properly sorted mark set from null, a single mark, or an
   // unsorted array of marks.
   static setFrom(marks) {
-    if (!marks || marks.length == 0) return empty
+    if (!marks || marks.length == 0) return Mark.none
     if (marks instanceof Mark) return [marks]
     var copy = marks.slice()
     copy.sort((a, b) => a.type.rank - b.type.rank)
@@ -94,4 +96,5 @@ class Mark {
 }
 exports.Mark = Mark
 
-const empty = []
+// :: [Mark] The empty set of marks.
+Mark.none = []

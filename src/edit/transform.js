@@ -1,5 +1,6 @@
 const {Fragment} = require("../model")
 const {Transform, insertPoint} = require("../transform")
+const {Selection} = require("./selection")
 
 const applyAndScroll = {scrollIntoView: true}
 
@@ -27,15 +28,15 @@ class EditorTransform extends Transform {
   }
 
   // :: Selection
-  // Get the transform's current selection. This defaults to the
+  // The transform's current selection. This defaults to the
   // editor selection [mapped](#Selection.map) through the steps in
   // this transform, but can be overwritten with
-  // [`setSelection`](EditorTransform.setSelection).
+  // [`setSelection`](#EditorTransform.setSelection).
   get selection() {
     if (this.curSelectionAt < this.steps.length) {
       if (this.curSelectionAt) {
         for (let i = this.curSelectionAt; i < this.steps.length; i++)
-          this.curSelection = this.curSelection.map(i == this.steps.length ? this.doc : this.docs[i + 1], this.maps[i])
+          this.curSelection = this.curSelection.map(i == this.steps.length - 1 ? this.doc : this.docs[i + 1], this.maps[i])
       } else {
         this.curSelection = this.curSelection.map(this.doc, this)
       }
@@ -85,7 +86,10 @@ class EditorTransform extends Transform {
       if (point != null) from = to = point
     }
 
-    return this.replaceWith(from, to, fragment)
+    this.replaceWith(from, to, fragment)
+    let map = this.maps[this.maps.length - 1]
+    this.setSelection(Selection.findNear(this.doc.resolve(map.map(to))))
+    return this
   }
 
   // :: () → EditorTransform

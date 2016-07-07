@@ -1,17 +1,17 @@
 const {doc, blockquote, pre, h1, h2, p, li, ol, ul, em, strong, code, a, a2, br, img, hr} = require("./build")
 const {Failure} = require("./failure")
-const {cmpNode, cmp} = require("./cmp")
+const {cmpNode, cmp, cmpStr} = require("./cmp")
 const {defTest} = require("./tests")
 
-const {defaultSchema: schema} = require("../schema")
-const {toDOM, fromDOM, fromDOMInContext} = require("../htmlformat")
+const {schema} = require("../schema-basic")
+const {parseDOMInContext} = require("../model")
 
 let document = typeof window == "undefined" ? require("jsdom").jsdom() : window.document
 
 function t(name, doc, dom) {
   defTest("dom_" + name, () => {
     let derivedDOM = document.createElement("div")
-    derivedDOM.appendChild(toDOM(doc, {document}))
+    derivedDOM.appendChild(doc.content.toDOM({document}))
     let declaredDOM = document.createElement("div")
     declaredDOM.innerHTML = dom
 
@@ -20,7 +20,7 @@ function t(name, doc, dom) {
     if (derivedText != declaredText)
       throw new Failure("DOM text mismatch: " + derivedText + " vs " + declaredText)
 
-    cmpNode(fromDOM(schema, derivedDOM), doc)
+    cmpNode(schema.parseDOM(derivedDOM), doc)
   })
 }
 
@@ -76,7 +76,7 @@ function recover(name, html, doc) {
   defTest("dom_recover_" + name, () => {
     let dom = document.createElement("div")
     dom.innerHTML = html
-    cmpNode(fromDOM(schema, dom), doc)
+    cmpNode(schema.parseDOM(dom), doc)
   })
 }
 
@@ -148,45 +148,119 @@ recover("font_weight",
         "<p style='font-weight: bold'>Hello</p>",
         doc(p(strong("Hello"))))
 
-function ctx(name, doc, html, openLeft, openRight, slice, parent) {
+recover("ignore_inline_tag",
+        "<p><u>a</u>bc</p>",
+        doc(p("abc")))
+
+function find(name, html, doc) {
+  defTest("dom_find_" + name, () => {
+    let dom = document.createElement("div")
+    dom.innerHTML = html
+    let tag = dom.querySelector("var"), prev = tag.previousSibling, next = tag.nextSibling, pos
+    if (prev && next && prev.nodeType == 3 && next.nodeType == 3) {
+      pos = {node: prev, offset: prev.nodeValue.length}
+      prev.nodeValue += next.nodeValue
+      next.parentNode.removeChild(next)
+    } else {
+      pos = {node: tag.parentNode, offset: Array.prototype.indexOf.call(tag.parentNode.childNodes, tag)}
+    }
+    tag.parentNode.removeChild(tag)
+    let result = schema.parseDOM(dom, {
+      findPositions: [pos]
+    })
+    cmpNode(result, doc)
+    cmp(pos.pos, doc.tag.a)
+  })
+}
+
+find("start_of_para",
+     "<p><var></var>hello</p>",
+     doc(p("<a>hello")))
+
+find("end_of_para",
+     "<p>hello<var></var></p>",
+     doc(p("hello<a>")))
+
+find("in_text",
+     "<p>hel<var></var>lo</p>",
+     doc(p("hel<a>lo")))
+
+find("ignored_node",
+     "<p>hi</p><object><var></var>foo</object><p>ok</p>",
+     doc(p("hi"), "<a>", p("ok")))
+
+find("between_nodes",
+     "<ul><li>foo</li><var></var><li>bar</li></ul>",
+     doc(ul(li(p("foo")), "<a>", li(p("bar")))))
+
+find("start_of_doc",
+     "<var></var><p>hi</p>",
+     doc("<a>", p("hi")))
+
+find("end_of_doc",
+     "<p>hi</p><var></var>",
+     doc(p("hi"), "<a>"))
+
+function ctx(name, doc, html, openLeft, slice) {
   defTest("dom_context_" + name, () => {
     let dom = document.createElement("div")
     dom.innerHTML = html
-    let result = fromDOMInContext(doc.resolve(doc.tag.a), dom, {openLeft, openRight})
-    let expected = slice.slice(slice.tag.a, slice.tag.b)
-    cmpNode(result.content, expected.content)
-    cmp(result.openLeft, expected.openLeft, "openLeft")
-    cmp(result.openRight, expected.openRight, "openRight")
-    if (parent) cmp(parent, result.possibleParent && result.possibleParent.type.name, "parent")
+    let insert = doc.tag.a, $insert = doc.resolve(insert)
+    for (let d = $insert.depth; d > 0 && insert == $insert.start(d) && $insert.end(d) == $insert.after(d + 1); d--) insert--
+    let result = parseDOMInContext(doc.resolve(insert), dom, {openLeft})
+    let sliceContent = slice.content, sliceEnd = sliceContent.size
+    while (sliceContent.lastChild && !sliceContent.lastChild.type.isLeaf) { sliceEnd--; sliceContent = sliceContent.lastChild.content }
+    let expected = slice.slice(slice.tag.a, sliceEnd)
+    cmpStr(result, expected)
   })
 }
 
 ctx("in_list",
     doc(ul(li(p("foo")), "<a>")),
-    "<li>bar</li>", 0, 0,
-    ul("<a>", li(p("bar")), "<b>"))
+    "<li>bar</li>", 0,
+    ul("<a>", li(p("bar"))))
 
 ctx("in_list_item",
     doc(ul(li(p("foo<a>")))),
-    "<li>bar</li>", 0, 0,
-    ul("<a>", li(p("bar")), "<b>"))
+    "<li>bar</li>", 0,
+    ul("<a>", li(p("bar"))))
 
 ctx("text_in_text",
     doc(p("foo<a>")),
-    "<h1>bar</h1>", 1, 1,
-    p("<a>bar<b>"))
+    "<h1>bar</h1>", 1,
+    p("<a>bar"))
 
 ctx("mess",
     doc(p("foo<a>")),
-    "<p>a</p>b<li>c</li>", 0, 0,
-    doc("<a>", p("a"), p("b"), ol(li(p("c"))), "<b>"))
+    "<p>a</p>b<li>c</li>", 0,
+    doc("<a>", p("a"), p("b"), ol(li(p("c")))))
+
+ctx("open_fits",
+    doc(p("foo<a>")),
+    "<p>hello</p><p>there</p>", 1,
+    doc(p("<a>hello"), p("there")))
 
 ctx("preserve_type",
     doc(p("<a>")),
-    "<h1>bar</h1>", 1, 1,
-    p("<a>bar<b>"), 0, 0, "heading")
+    "<h1>bar</h1>", 1,
+    doc("<a>", h1("bar")))
+
+ctx("preserve_type_deep",
+    doc(p("<a>")),
+    "<h1>bar</h1><p>foo</p>", 1,
+    doc("<a>", h1("bar"), p("foo")))
 
 ctx("leave_marks",
     doc(pre("<a>")),
-    "<p>foo<strong>bar</strong></p>", 1, 1,
-    p("<a>foo", strong("bar<b>")), 0, 0)
+    "<p>foo<strong>bar</strong></p>", 1,
+    doc("<a>", p("foo", strong("bar"))))
+
+ctx("paste_list",
+    doc(p("<a>")),
+    "<ol><li><p>foo</p></li><li><p>bar</p></li></ol>", 3,
+    doc("<a>", ol(li(p("foo")), li(p("bar")))))
+
+ctx("join_list",
+    doc(ol(li(p("x<a>")))),
+    "<ol><li><p>foo</p></li><li><p>bar</p></li></ol>", 3,
+    doc(ol(li(p("<a>foo")), li(p("bar")))))

@@ -1,4 +1,3 @@
-const {toDOM, nodeToDOM} = require("../htmlformat")
 const {elt} = require("../util/dom")
 const browser = require("../util/browser")
 
@@ -80,7 +79,7 @@ function splitSpan(span, at) {
 
 function draw(pm, doc) {
   pm.content.textContent = ""
-  pm.content.appendChild(toDOM(doc, options(pm.ranges.activeRangeTracker())))
+  pm.content.appendChild(doc.content.toDOM(options(pm.ranges.activeRangeTracker())))
 }
 exports.draw = draw
 
@@ -118,8 +117,19 @@ function redraw(pm, dirty, doc, prev) {
   let opts = options(pm.ranges.activeRangeTracker())
 
   function scan(dom, node, prev, pos) {
-    let iPrev = 0, pChild = prev.firstChild
+    let iPrev = 0, oPrev = 0, pChild = prev.firstChild
     let domPos = dom.firstChild
+
+    function syncDOM() {
+      while (domPos) {
+        let curOff = domPos.nodeType == 1 && domPos.getAttribute("pm-offset")
+        if (!curOff || +curOff < oPrev)
+          domPos = movePast(domPos)
+        else
+          return +curOff == oPrev
+      }
+      return false
+    }
 
     for (let iNode = 0, offset = 0; iNode < node.childCount; iNode++) {
       let child = node.child(iNode), matching, reuseDOM
@@ -127,20 +137,21 @@ function redraw(pm, dirty, doc, prev) {
       if (found > -1) {
         matching = child
         while (iPrev != found) {
+          oPrev += prev.child(iPrev).nodeSize
           iPrev++
-          domPos = movePast(domPos)
         }
       }
 
-      if (matching && !dirty.get(matching)) {
+      if (matching && !dirty.get(matching) && syncDOM()) {
         reuseDOM = true
-      } else if (pChild && !child.isText && child.sameMarkup(pChild) && dirty.get(pChild) != DIRTY_REDRAW) {
+      } else if (pChild && !child.isText && child.sameMarkup(pChild) && dirty.get(pChild) != DIRTY_REDRAW && syncDOM()) {
         reuseDOM = true
         if (!pChild.type.isLeaf)
           scan(childContainer(domPos), child, pChild, pos + offset + 1)
       } else {
         opts.pos = pos + offset
-        let rendered = nodeToDOM(child, opts, offset)
+        opts.offset = offset
+        let rendered = child.toDOM(opts)
         dom.insertBefore(rendered, domPos)
         reuseDOM = false
       }
@@ -149,15 +160,14 @@ function redraw(pm, dirty, doc, prev) {
         domPos.setAttribute("pm-offset", offset)
         domPos.setAttribute("pm-size", child.nodeSize)
         domPos = domPos.nextSibling
+        oPrev += prev.child(iPrev).nodeSize
         pChild = prev.maybeChild(++iPrev)
       }
       offset += child.nodeSize
     }
 
-    while (pChild) {
-      domPos = movePast(domPos)
-      pChild = prev.maybeChild(++iPrev)
-    }
+    while (domPos) domPos = movePast(domPos)
+
     if (node.isTextblock) adjustTrailingHacks(dom, node)
 
     if (browser.ios) iosHacks(dom)

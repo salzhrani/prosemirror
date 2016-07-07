@@ -1,4 +1,5 @@
 const {Fragment} = require("./fragment")
+const {Mark} = require("./mark")
 
 class ContentExpr {
   constructor(nodeType, elements, inlineContent) {
@@ -169,7 +170,9 @@ class ContentElement {
 }
 
 // ;; Represents a partial match of a node type's [content
-// expression](#SchemaSpec.nodes).
+// expression](#NodeSpec), and can be used to find out whether further
+// content matches here, and whether a given position is a valid end
+// of the parent node.
 class ContentMatch {
   constructor(expr, attrs, index, count) {
     this.expr = expr
@@ -180,6 +183,14 @@ class ContentMatch {
 
   get element() { return this.expr.elements[this.index] }
 
+  get nextElement() {
+    for (let i = this.index, count = this.count; i < this.expr.elements.length; i++) {
+      let element = this.expr.elements[i]
+      if (this.resolveValue(element.max) > count) return element
+      count = 0
+    }
+  }
+
   move(index, count) {
     return new ContentMatch(this.expr, this.attrs, index, count)
   }
@@ -189,15 +200,15 @@ class ContentMatch {
   }
 
   // :: (Node) → ?ContentMatch
-  // Match a node, returning an updated match if successful.
+  // Match a node, returning a new match after the node if successful.
   matchNode(node) {
     return this.matchType(node.type, node.attrs, node.marks)
   }
 
   // :: (NodeType, ?Object, [Mark]) → ?ContentMatch
-  // Match a node type and marks, returning an updated match if
-  // successful.
-  matchType(type, attrs, marks) {
+  // Match a node type and marks, returning an match after that node
+  // if successful.
+  matchType(type, attrs, marks = Mark.none) {
     // FIXME `var` to work around Babel bug T7293
     for (var {index, count} = this; index < this.expr.elements.length; index++, count = 0) {
       let elt = this.expr.elements[index], max = this.resolveValue(elt.max)
@@ -253,9 +264,10 @@ class ContentMatch {
   // :: (Fragment, bool, ?number) → ?Fragment
   // Try to match the given fragment, and if that fails, see if it can
   // be made to match by inserting nodes in front of it. When
-  // successful, return a fragment (which may be empty if nothing had
-  // to be inserted). When `toEnd` is true, only return a fragment if
-  // the resulting match goes to the end of the content expression.
+  // successful, return a fragment of inserted nodes (which may be
+  // empty if nothing had to be inserted). When `toEnd` is true, only
+  // return a fragment if the resulting match goes to the end of the
+  // content expression.
   fillBefore(after, toEnd, startIndex) {
     let added = [], match = this, index = startIndex || 0, end = this.expr.elements.length
     for (;;) {
@@ -299,27 +311,25 @@ class ContentMatch {
 
   // :: (NodeType, ?Object) → ?[{type: NodeType, attrs: Object}]
   // Find a set of wrapping node types that would allow a node of type
-  // `type` to appear at this position. The result may be empty (when
-  // it fits directly) and will be null when no such wrapping exists.
+  // `target` with attributes `targetAttrs` to appear at this
+  // position. The result may be empty (when it fits directly) and
+  // will be null when no such wrapping exists.
   findWrapping(target, targetAttrs) {
     // FIXME find out how expensive this is. Try to reintroduce caching?
     let seen = Object.create(null), first = {match: this, via: null}, active = [first]
     while (active.length) {
       let current = active.shift(), match = current.match
+      if (match.matchType(target, targetAttrs)) {
+        let result = []
+        for (let obj = current; obj != first; obj = obj.via)
+          result.push({type: obj.match.expr.nodeType, attrs: obj.match.attrs})
+        return result.reverse()
+      }
       let possible = match.possibleContent()
       for (let i = 0; i < possible.length; i++) {
         let {type, attrs} = possible[i], fullAttrs = type.computeAttrs(attrs)
-        if (type == target) {
-          let fits = match.matchType(type, targetAttrs, [])
-          if (fits && fits.validEnd()) {
-            let result = []
-            for (let obj = current; obj.via; obj = obj.via)
-              result.push({type: obj.match.expr.nodeType, attrs: obj.match.attrs})
-            return result.reverse()
-          }
-        }
         if (!type.isLeaf && !(type.name in seen) &&
-            (current == first || match.matchType(type, fullAttrs, []).validEnd())) {
+            (current == first || match.matchType(type, fullAttrs).validEnd())) {
           active.push({match: type.contentExpr.start(fullAttrs), via: current})
           seen[type.name] = true
         }

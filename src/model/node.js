@@ -2,9 +2,10 @@ const {Fragment} = require("./fragment")
 const {Mark} = require("./mark")
 const {Slice, replace} = require("./replace")
 const {ResolvedPos} = require("./resolvedpos")
+const {nodeToDOM} = require("./to_dom")
 const {compareDeep} = require("../util/comparedeep")
 
-const emptyArray = [], emptyAttrs = Object.create(null)
+const emptyAttrs = Object.create(null)
 
 // ;; This class represents a node in the tree that makes up a
 // ProseMirror document. So a document is an instance of `Node`, with
@@ -25,23 +26,26 @@ class Node {
     this.type = type
 
     // :: Object
-    // An object mapping attribute names to string values. The kind of
+    // An object mapping attribute names to values. The kind of
     // attributes allowed and required are determined by the node
     // type.
     this.attrs = attrs
 
     // :: Fragment
-    // The node's content.
+    // A container holding the node's children.
     this.content = content || Fragment.empty
 
     // :: [Mark]
     // The marks (things like whether it is emphasized or part of a
     // link) associated with this node.
-    this.marks = marks || emptyArray
+    this.marks = marks || Mark.none
   }
 
+  // :: ?string #path=Node.prototype.text
+  // For text nodes, this contains the node's text content.
+
   // :: number
-  // The size of this node. For text node, this is the amount of
+  // The size of this node. For text nodes, this is the amount of
   // characters. For leaf nodes, it is one. And for non-leaf nodes, it
   // is the size of the content plus two (the start and end token).
   get nodeSize() { return this.type.isLeaf ? 1 : 2 + this.content.size }
@@ -51,7 +55,7 @@ class Node {
   get childCount() { return this.content.childCount }
 
   // :: (number) → Node
-  // Get the child node at the given index. Raise an error when the
+  // Get the child node at the given index. Raises an error when the
   // index is out of range.
   child(index) { return this.content.child(index) }
 
@@ -59,15 +63,15 @@ class Node {
   // Get the child node at the given index, if it exists.
   maybeChild(index) { return this.content.maybeChild(index) }
 
-  // :: ((node: Node, offset: number))
-  // Call `f` for every child node, passing the node and its offset
-  // into this parent node.
+  // :: ((node: Node, offset: number, index: number))
+  // Call `f` for every child node, passing the node, its offset
+  // into this parent node, and its index.
   forEach(f) { this.content.forEach(f) }
 
   // :: string
-  // Concatenate all the text nodes found in this fragment and its
+  // Concatenates all the text nodes found in this fragment and its
   // children.
-  get textContent() { this.textBetween(0, this.content.size, "") }
+  get textContent() { return this.textBetween(0, this.content.size, "") }
 
   // :: (number, number, ?string) → string
   // Get all text between positions `from` and `to`. When `separator`
@@ -104,7 +108,7 @@ class Node {
   hasMarkup(type, attrs, marks) {
     return this.type == type &&
       compareDeep(this.attrs, attrs || type.defaultAttrs || emptyAttrs) &&
-      Mark.sameSet(this.marks, marks || emptyArray)
+      Mark.sameSet(this.marks, marks || Mark.none)
   }
 
   // :: (?Fragment) → Node
@@ -216,7 +220,7 @@ class Node {
     let $pos = this.resolve(pos), parent = $pos.parent, index = $pos.index()
 
     // In an empty parent, return the empty array
-    if (parent.content.size == 0) return emptyArray
+    if (parent.content.size == 0) return Mark.none
     // When inside a text node or at the start of the parent node, return the node's marks
     if (index == 0 || !$pos.atNodeBoundary) return parent.child(index).marks
 
@@ -284,9 +288,10 @@ class Node {
 
   // :: (number, number, NodeType, ?[Mark]) → bool
   // Test whether replacing the range `from` to `to` (by index) with a
-  // node of the given type and marks would be valid.
+  // node of the given type with the given attributes and marks would
+  // be valid.
   canReplaceWith(from, to, type, attrs, marks) {
-    return this.type.contentExpr.checkReplaceWith(this.attrs, this.content, from, to, type, attrs, marks || emptyArray)
+    return this.type.contentExpr.checkReplaceWith(this.attrs, this.content, from, to, type, attrs, marks || Mark.none)
   }
 
   // :: (Node) → bool
@@ -300,7 +305,8 @@ class Node {
   }
 
   defaultContentType(at) {
-    return this.contentMatchAt(at).element.defaultType()
+    let elt = this.contentMatchAt(at).nextElement
+    return elt && elt.defaultType()
   }
 
   // :: () → Object
@@ -325,18 +331,22 @@ class Node {
     let content = json.text != null ? json.text : Fragment.fromJSON(schema, json.content)
     return type.create(json.attrs, content, json.marks && json.marks.map(schema.markFromJSON))
   }
+
+  // :: (?Object) → DOMNode
+  // Serialize this node to a DOM node. This can be useful when you
+  // need to serialize a part of a document, as opposed to the whole
+  // document, but you'll usually want to do
+  // `doc.content.`[`toDOM()`](#Fragment.toDOM) instead.
+  toDOM(options = {}) { return nodeToDOM(this, options) }
 }
 exports.Node = Node
 
-// ;; #forward=Node
 class TextNode extends Node {
   constructor(type, attrs, content, marks) {
     super(type, attrs, null, marks)
 
     if (!content) throw new RangeError("Empty text nodes are not allowed")
 
-    // :: ?string
-    // For text nodes, this contains the node's text content.
     this.text = content
   }
 

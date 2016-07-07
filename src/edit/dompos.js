@@ -1,22 +1,26 @@
 const {contains} = require("../util/dom")
 
-// : (ProseMirror, DOMNode) → number
-// Get the path for a given a DOM node in a document.
-function posBeforeFromDOM(pm, node) {
+function isEditorContent(dom) {
+  return dom.classList.contains("ProseMirror-content")
+}
+
+// : (DOMNode) → number
+// Get the position before a given a DOM node in a document.
+function posBeforeFromDOM(node) {
   let pos = 0, add = 0
-  for (let cur = node; cur != pm.content; cur = cur.parentNode) {
+  for (let cur = node; !isEditorContent(cur); cur = cur.parentNode) {
     let attr = cur.getAttribute("pm-offset")
     if (attr) { pos += +attr + add; add = 1 }
   }
   return pos
 }
-exports.posBeforeFromDOM = posBeforeFromDOM
 
-// : (ProseMirror, DOMNode, number) → number
-function posFromDOM(pm, dom, domOffset, loose) {
-  if (!loose && pm.operation && pm.doc != pm.operation.doc)
-    throw new RangeError("Fetching a position from an outdated DOM structure")
+// : number Extra return value from posFromDOM, indicating whether the
+// position was inside a leaf node.
+let posInLeaf = null
 
+// : (DOMNode, number) → number
+function posFromDOM(dom, domOffset, bias = 0) {
   if (domOffset == null) {
     domOffset = Array.prototype.indexOf.call(dom.parentNode.childNodes, dom)
     dom = dom.parentNode
@@ -29,45 +33,38 @@ function posFromDOM(pm, dom, domOffset, loose) {
     let adjust = 0
     if (dom.nodeType == 3) {
       innerOffset += domOffset
-      // IE has a habit of splitting text nodes for no apparent reason
-      if (loose) for (let before = dom.previousSibling; before && before.nodeType == 3; before = before.previousSibling)
-        innerOffset += before.nodeValue.length
     } else if (tag = dom.getAttribute("pm-offset") && !childContainer(dom)) {
-      if (!loose) {
-        let size = +dom.getAttribute("pm-size")
-        if (domOffset == dom.childNodes.length) innerOffset = size
-        else innerOffset = Math.min(innerOffset, size)
-      } else {
-        for (let i = 0; i < domOffset; i++) {
-          let child = dom.childNodes[i]
-          if (child.nodeType == 3) innerOffset += child.nodeValue.length
-        }
-      }
-      return posBeforeFromDOM(pm, dom) + innerOffset
+      let size = +dom.getAttribute("pm-size")
+      if (dom.nodeType == 1 && !dom.firstChild) innerOffset = bias > 0 ? size : 0
+      else if (domOffset == dom.childNodes.length) innerOffset = size
+      else innerOffset = Math.min(innerOffset, size)
+      posInLeaf = posBeforeFromDOM(dom)
+      return posInLeaf + innerOffset
     } else if (dom.hasAttribute("pm-container")) {
       break
     } else if (tag = dom.getAttribute("pm-inner-offset")) {
       innerOffset += +tag
       adjust = -1
-    } else if (domOffset && domOffset == dom.childNodes.length) {
-      adjust = 1
+    } else if (domOffset == dom.childNodes.length) {
+      if (domOffset) adjust = 1
+      else adjust = bias > 0 ? 1 : 0
     }
 
     let parent = dom.parentNode
     domOffset = adjust < 0 ? 0 : Array.prototype.indexOf.call(parent.childNodes, dom) + adjust
     dom = parent
+    bias = 0
   }
 
-  let start = dom == pm.content ? 0 : posBeforeFromDOM(pm, dom) + 1, before = 0
+  let start = isEditorContent(dom) ? 0 : posBeforeFromDOM(dom) + 1, before = 0
 
   for (let child = dom.childNodes[domOffset - 1]; child; child = child.previousSibling) {
     if (child.nodeType == 1 && (tag = child.getAttribute("pm-offset"))) {
       before += +tag + +child.getAttribute("pm-size")
       break
-    } else if (loose && child.nodeType == 3) {
-      before += child.nodeValue.length
     }
   }
+  posInLeaf = null
   return start + before + innerOffset
 }
 exports.posFromDOM = posFromDOM
@@ -113,6 +110,38 @@ function DOMFromPos(pm, pos, loose) {
   }
 }
 exports.DOMFromPos = DOMFromPos
+
+// : (ProseMirror, number) → {node: DOMNode, offset: number}
+// The same as DOMFromPos, but searching from the bottom instead of
+// the top. This is needed in domchange.js, when there is an arbitrary
+// DOM change somewhere in our document, and we can no longer rely on
+// the DOM structure around the selection.
+function DOMFromPosFromEnd(pm, pos) {
+  let container = pm.content, dist = (pm.operation ? pm.operation.doc : pm.doc).content.size - pos
+  for (;;) {
+    for (let child = container.lastChild, i = container.childNodes.length;; child = child.previousSibling, i--) {
+      if (!child) return {node: container, offset: i}
+
+      let size = child.nodeType == 1 && child.getAttribute("pm-size")
+      if (size) {
+        if (!dist) return {node: container, offset: i}
+        size = +size
+        if (dist < size) {
+          container = childContainer(child)
+          if (!container) {
+            return leafAt(child, size - dist)
+          } else {
+            dist--
+            break
+          }
+        } else {
+          dist -= size
+        }
+      }
+    }
+  }
+}
+exports.DOMFromPosFromEnd = DOMFromPosFromEnd
 
 // : (ProseMirror, number) → DOMNode
 function DOMAfterPos(pm, pos) {
@@ -178,7 +207,7 @@ function scrollIntoView(pm, pos) {
 exports.scrollIntoView = scrollIntoView
 
 function findOffsetInNode(node, coords) {
-  let closest, dyClosest = 2e8, coordsClosest, offset = 0
+  let closest, dxClosest = 2e8, coordsClosest, offset = 0
   for (let child = node.firstChild; child; child = child.nextSibling) {
     let rects
     if (child.nodeType == 1) rects = child.getClientRects()
@@ -187,27 +216,25 @@ function findOffsetInNode(node, coords) {
 
     for (let i = 0; i < rects.length; i++) {
       let rect = rects[i]
-      if (rect.left <= coords.left && rect.right >= coords.left) {
-        let dy = rect.top > coords.top ? rect.top - coords.top
-            : rect.bottom < coords.top ? coords.top - rect.bottom : 0
-        if (dy < dyClosest) { // FIXME does not group by row
+      if (rect.top <= coords.top && rect.bottom >= coords.top) {
+        let dx = rect.left > coords.left ? rect.left - coords.left
+            : rect.right < coords.left ? coords.left - rect.right : 0
+        if (dx < dxClosest) {
           closest = child
-          dyClosest = dy
-          coordsClosest = dy ? {left: coords.left, top: rect.top} : coords
+          dxClosest = dx
+          coordsClosest = dx && closest.nodeType == 3 ? {left: rect.right < coords.left ? rect.right : rect.left, top: coords.top} : coords
           if (child.nodeType == 1 && !child.firstChild)
             offset = i + (coords.left >= (rect.left + rect.right) / 2 ? 1 : 0)
           continue
         }
       }
-      if (!closest &&
-          (coords.top >= rect.bottom || coords.top >= rect.top && coords.left >= rect.right))
+      if (!closest && (coords.left >= rect.right || coords.left >= rect.left && coords.top >= rect.bottom))
         offset = i + 1
     }
   }
   if (!closest) return {node, offset}
   if (closest.nodeType == 3) return findOffsetInText(closest, coordsClosest)
-  if (closest.firstChild) return findOffsetInNode(closest, coordsClosest)
-  return {node, offset}
+  return findOffsetInNode(closest, coordsClosest)
 }
 
 function findOffsetInText(node, coords) {
@@ -216,7 +243,7 @@ function findOffsetInText(node, coords) {
   for (let i = 0; i < len; i++) {
     range.setEnd(node, i + 1)
     range.setStart(node, i)
-    let rect = range.getBoundingClientRect()
+    let rect = singleRect(range, 1)
     if (rect.top == rect.bottom) continue
     if (rect.left - 1 <= coords.left && rect.right + 1 >= coords.left &&
         rect.top - 1 <= coords.top && rect.bottom + 1 >= coords.top)
@@ -225,14 +252,30 @@ function findOffsetInText(node, coords) {
   return {node, offset: 0}
 }
 
+function targetKludge(dom, coords) {
+  if (/^[uo]l$/i.test(dom.nodeName)) {
+    for (let child = dom.firstChild; child; child = child.nextSibling) {
+      if (child.nodeType != 1 || !child.hasAttribute("pm-offset") || !/^li$/i.test(child.nodeName)) continue
+      let childBox = child.getBoundingClientRect()
+      if (coords.left > childBox.left - 2) break
+      if (childBox.top <= coords.top && childBox.bottom >= coords.top) return child
+    }
+  }
+  return dom
+}
+
 // Given an x,y position on the editor, get the position in the document.
 function posAtCoords(pm, coords) {
-  let elt = document.elementFromPoint(coords.left, coords.top + 1)
+  let elt = targetKludge(document.elementFromPoint(coords.left, coords.top + 1), coords)
   if (!contains(pm.content, elt)) return null
 
-  if (!elt.firstChild) elt = elt.parentNode
-  let {node, offset} = findOffsetInNode(elt, coords)
-  return posFromDOM(pm, node, offset)
+  let {node, offset} = findOffsetInNode(elt, coords), bias = -1
+  if (node.nodeType == 1 && !node.firstChild) {
+    let rect = node.getBoundingClientRect()
+    bias = rect.left != rect.right && coords.left > (rect.left + rect.right) / 2 ? 1 : -1
+  }
+  let pos = posFromDOM(node, offset, bias)
+  return {pos, inside: posInLeaf}
 }
 exports.posAtCoords = posAtCoords
 
@@ -282,77 +325,3 @@ function coordsAtPos(pm, pos) {
   return {top: rect.top, bottom: rect.bottom, left: x, right: x}
 }
 exports.coordsAtPos = coordsAtPos
-
-// ;; #path=NodeType #kind=class #noAnchor
-// You can add several properties to [node types](#NodeType) to
-// influence the way the editor interacts with them.
-
-function targetKludge(dom, coords) {
-  if (/^[uo]l$/i.test(dom.nodeName)) {
-    for (let child = dom.firstChild; child; child = child.nextSibling) {
-      if (child.nodeType != 1 || !child.hasAttribute("pm-offset") || !/^li$/i.test(child.nodeName)) continue
-      let childBox = child.getBoundingClientRect()
-      if (coords.left > childBox.left - 2) break
-      if (childBox.top <= coords.top && childBox.bottom >= coords.top) return child
-    }
-  }
-  return dom
-}
-
-function selectableNodeAbove(pm, dom, coords, liberal) {
-  dom = targetKludge(dom, coords)
-  for (; dom && dom != pm.content; dom = dom.parentNode) {
-    if (dom.hasAttribute("pm-offset")) {
-      let pos = posBeforeFromDOM(pm, dom), node = pm.doc.nodeAt(pos)
-      // Leaf nodes are implicitly clickable
-      if ((liberal || node.type.isLeaf) && node.type.selectable) return pos
-      if (!liberal) return null
-    }
-  }
-}
-exports.selectableNodeAbove = selectableNodeAbove
-
-// :: (pm: ProseMirror, event: MouseEvent, pos: number, node: Node) → bool
-// #path=NodeType.prototype.handleClick
-// If a node is directly clicked (that is, the click didn't land in a
-// DOM node belonging to a child node), and its type has a
-// `handleClick` method, that method is given a chance to handle the
-// click. The method is called, and should return `false` if it did
-// _not_ handle the click.
-//
-// The `event` passed is the event for `"mousedown"`, but calling
-// `preventDefault` on it has no effect, since this method is only
-// called after a corresponding `"mouseup"` has occurred and
-// ProseMirror has determined that this is not a drag or multi-click
-// event.
-
-// :: (pm: ProseMirror, event: MouseEvent, pos: number, node: Node) → bool
-// #path=NodeType.prototype.handleDoubleClick
-// This works like [`handleClick`](#NodeType.handleClick), but is
-// called for double clicks instead.
-
-// :: (pm: ProseMirror, event: MouseEvent, pos: number, node: Node) → bool
-// #path=NodeType.prototype.handleContextMenu
-//
-// When the [context
-// menu](https://developer.mozilla.org/en-US/docs/Web/Events/contextmenu)
-// is activated in the editable context, nodes that the clicked
-// position falls inside of get a chance to react to it. Node types
-// may define a `handleContextMenu` method, which will be called when
-// present, first on inner nodes and then up the document tree, until
-// one of the methods returns something other than `false`.
-//
-// The handlers can inspect `event.target` to figure out whether they
-// were directly clicked, and may call `event.preventDefault()` to
-// prevent the native context menu.
-
-function handleNodeClick(pm, type, event, target, direct) {
-  for (let dom = target; dom && dom != pm.content; dom = dom.parentNode) {
-    if (dom.hasAttribute("pm-offset")) {
-      let pos = posBeforeFromDOM(pm, dom), node = pm.doc.nodeAt(pos)
-      let handled = node.type[type] && node.type[type](pm, event, pos, node) !== false
-      if (direct || handled) return handled
-    }
-  }
-}
-exports.handleNodeClick = handleNodeClick
