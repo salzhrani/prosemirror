@@ -139,7 +139,7 @@ class NodeBuilder {
     let last = this.content[this.content.length - 1], m
     if (last && last.isText && (m = /\s+$/.exec(last.text))) {
       if (last.text.length == m[0].length) this.content.pop()
-      else this.content[this.content.length - 1] = last.copy(last.text.slice(0, last.text.length - m[0].length))
+      else this.content[this.content.length - 1] = last.withText(last.text.slice(0, last.text.length - m[0].length))
     }
   }
 
@@ -317,7 +317,8 @@ class DOMParseState {
     if (!result) return false
 
     let sync, before
-    if (result.node) sync = this.enter(result.node, result.attrs)
+    if (result.node && result.node.isLeaf) this.insertNode(result.node.create(result.attrs))
+    else if (result.node) sync = this.enter(result.node, result.attrs)
     else before = this.addMark(result.mark.create(result.attrs))
 
     let contentNode = dom, preserve = null, prevPreserve = this.preserveWhitespace
@@ -325,6 +326,8 @@ class DOMParseState {
       if (result.content.content === false) contentNode = null
       else if (result.content.content) contentNode = result.content.content
       preserve = result.content.preserveWhitespace
+    } else if (result.node && result.node.isLeaf) {
+      contentNode = null
     }
 
     if (contentNode) {
@@ -336,7 +339,7 @@ class DOMParseState {
       if (preserve != null) this.preserveWhitespace = prevPreserve
       this.findAround(dom, contentNode, true)
     } else {
-      this.findInside(parent)
+      this.findInside(dom)
     }
     return true
   }
@@ -366,14 +369,6 @@ class DOMParseState {
       this.sync(ok)
       return true
     }
-  }
-
-  // : (NodeType, ?Object, [Node]) → ?Node
-  // Insert a node of the given type, with the given content, based on
-  // `dom`, at the current position in the document.
-  insert(type, attrs, content) {
-    let node = type.createAndFill(attrs, content, type.isInline ? this.marks : null)
-    if (node) this.insertNode(node)
   }
 
   // : (NodeType, ?Object) → ?NodeBuilder
@@ -408,12 +403,15 @@ class DOMParseState {
   // tools and allowed by browsers to mean that the nested list is
   // actually part of the list item above it.
   normalizeList(dom) {
-    for (let child = dom.firstChild, prev; child; child = child.nextSibling) {
-      if (child.nodeType == 1 &&
-          listTags.hasOwnProperty(child.nodeName.toLowerCase()) &&
-          (prev = child.previousSibling)) {
-        prev.appendChild(child)
-        child = prev
+    for (let child = dom.firstChild, prevItem = null; child; child = child.nextSibling) {
+      let name = child.nodeType == 1 ? child.nodeName.toLowerCase() : null
+      if (name && listTags.hasOwnProperty(name) && prevItem) {
+        prevItem.appendChild(child)
+        child = prevItem
+      } else if (name == "li") {
+        prevItem = child
+      } else if (name) {
+        prevItem = null
       }
     }
   }

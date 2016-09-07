@@ -15,9 +15,7 @@ function posBeforeFromDOM(node) {
   return pos
 }
 
-// : number Extra return value from posFromDOM, indicating whether the
-// position was inside a leaf node.
-let posInLeaf = null
+const posFromDOMResult = {pos: 0, inLeaf: -1}
 
 // : (DOMNode, number) → number
 function posFromDOM(dom, domOffset, bias = 0) {
@@ -38,13 +36,11 @@ function posFromDOM(dom, domOffset, bias = 0) {
       if (dom.nodeType == 1 && !dom.firstChild) innerOffset = bias > 0 ? size : 0
       else if (domOffset == dom.childNodes.length) innerOffset = size
       else innerOffset = Math.min(innerOffset, size)
-      posInLeaf = posBeforeFromDOM(dom)
-      return posInLeaf + innerOffset
+      let inLeaf = posFromDOMResult.inLeaf = posBeforeFromDOM(dom)
+      posFromDOMResult.pos = inLeaf + innerOffset
+      return posFromDOMResult
     } else if (dom.hasAttribute("pm-container")) {
       break
-    } else if (tag = dom.getAttribute("pm-inner-offset")) {
-      innerOffset += +tag
-      adjust = -1
     } else if (domOffset == dom.childNodes.length) {
       if (domOffset) adjust = 1
       else adjust = bias > 0 ? 1 : 0
@@ -64,8 +60,9 @@ function posFromDOM(dom, domOffset, bias = 0) {
       break
     }
   }
-  posInLeaf = null
-  return start + before + innerOffset
+  posFromDOMResult.inLeaf = -1
+  posFromDOMResult.pos = start + before + innerOffset
+  return posFromDOMResult
 }
 exports.posFromDOM = posFromDOM
 
@@ -158,16 +155,6 @@ function leafAt(node, offset) {
     let child = node.firstChild
     if (!child) return {node, offset}
     if (child.nodeType != 1) return {node: child, offset}
-    if (child.hasAttribute("pm-inner-offset")) {
-      let nodeOffset = 0
-      for (;;) {
-        let nextSib = child.nextSibling, nextOffset
-        if (!nextSib || (nextOffset = +nextSib.getAttribute("pm-inner-offset")) >= offset) break
-        child = nextSib
-        nodeOffset = nextOffset
-      }
-      offset -= nodeOffset
-    }
     node = child
   }
 }
@@ -177,10 +164,15 @@ function windowRect() {
           top: 0, bottom: window.innerHeight}
 }
 
+function parentNode(node) {
+  let parent = node.parentNode
+  return parent.nodeType == 11 ? parent.host : parent
+}
+
 function scrollIntoView(pm, pos) {
   if (!pos) pos = pm.sel.range.head || pm.sel.range.from
   let coords = coordsAtPos(pm, pos)
-  for (let parent = pm.content;; parent = parent.parentNode) {
+  for (let parent = pm.content;; parent = parentNode(parent)) {
     let {scrollThreshold, scrollMargin} = pm.options
     let atBody = parent == document.body
     let rect = atBody ? windowRect() : parent.getBoundingClientRect()
@@ -208,7 +200,7 @@ exports.scrollIntoView = scrollIntoView
 
 function findOffsetInNode(node, coords) {
   let closest, dxClosest = 2e8, coordsClosest, offset = 0
-  for (let child = node.firstChild; child; child = child.nextSibling) {
+  for (let child = node.firstChild, childIndex = 0; child; child = child.nextSibling, childIndex++) {
     let rects
     if (child.nodeType == 1) rects = child.getClientRects()
     else if (child.nodeType == 3) rects = textRange(child).getClientRects()
@@ -223,8 +215,8 @@ function findOffsetInNode(node, coords) {
           closest = child
           dxClosest = dx
           coordsClosest = dx && closest.nodeType == 3 ? {left: rect.right < coords.left ? rect.right : rect.left, top: coords.top} : coords
-          if (child.nodeType == 1 && !child.firstChild)
-            offset = i + (coords.left >= (rect.left + rect.right) / 2 ? 1 : 0)
+          if (child.nodeType == 1 && dx)
+            offset = childIndex + (coords.left >= (rect.left + rect.right) / 2 ? 1 : 0)
           continue
         }
       }
@@ -232,8 +224,8 @@ function findOffsetInNode(node, coords) {
         offset = i + 1
     }
   }
-  if (!closest) return {node, offset}
-  if (closest.nodeType == 3) return findOffsetInText(closest, coordsClosest)
+  if (closest && closest.nodeType == 3) return findOffsetInText(closest, coordsClosest)
+  if (!closest || (dxClosest && closest.nodeType == 1)) return {node, offset}
   return findOffsetInNode(closest, coordsClosest)
 }
 
@@ -266,7 +258,7 @@ function targetKludge(dom, coords) {
 
 // Given an x,y position on the editor, get the position in the document.
 function posAtCoords(pm, coords) {
-  let elt = targetKludge(document.elementFromPoint(coords.left, coords.top + 1), coords)
+  let elt = targetKludge(pm.root.elementFromPoint(coords.left, coords.top + 1), coords)
   if (!contains(pm.content, elt)) return null
 
   let {node, offset} = findOffsetInNode(elt, coords), bias = -1
@@ -274,8 +266,7 @@ function posAtCoords(pm, coords) {
     let rect = node.getBoundingClientRect()
     bias = rect.left != rect.right && coords.left > (rect.left + rect.right) / 2 ? 1 : -1
   }
-  let pos = posFromDOM(node, offset, bias)
-  return {pos, inside: posInLeaf}
+  return posFromDOM(node, offset, bias)
 }
 exports.posAtCoords = posAtCoords
 
