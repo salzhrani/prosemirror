@@ -205,7 +205,7 @@ function openPrompt(pm, content, options) {
     let cX = Math.max(0, outerBox.left) + Math.min(window.innerWidth, outerBox.right) - blockBox.width
     let cY = Math.max(0, outerBox.top) + Math.min(window.innerHeight, outerBox.bottom) - blockBox.height
     wrapper.style.left = (cX / 2 - outerBox.left) + "px"
-    wrapper.style.top = (cY / 2 - outerBox.top) + "px"
+    wrapper.style.top = Math.min(cY / 2, outerBox.bottom - blockBox.height) - outerBox.top + "px"
   }
 
   let close = () => {

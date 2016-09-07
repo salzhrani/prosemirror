@@ -29,7 +29,7 @@ function getIcon(icon) {
     node.appendChild(icon.dom.cloneNode(true))
   } else {
     node.appendChild(document.createElement("span")).textContent = icon && icon.text || ''
-    node.setAttribute('data-name', name);
+    node.setAttribute('data-name', icon);
     if (icon.css) node.firstChild.style.cssText = icon.style
   }
   return node

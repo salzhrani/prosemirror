@@ -23,10 +23,10 @@ function add(value, target) {
 }
 
 
-const reqFrame = window.requestAnimationFrame || window.mozRequestAnimationFrame ||
-      window.webkitRequestAnimationFrame || window.msRequestAnimationFrame
-const cancelFrame = window.cancelAnimationFrame || window.mozCancelAnimationFrame ||
-      window.webkitCancelAnimationFrame || window.msCancelAnimationFrame
+const reqFrame = (window.requestAnimationFrame || window.mozRequestAnimationFrame ||
+      window.webkitRequestAnimationFrame || window.msRequestAnimationFrame).bind(window)
+const cancelFrame = (window.cancelAnimationFrame || window.mozCancelAnimationFrame ||
+      window.webkitCancelAnimationFrame || window.msCancelAnimationFrame).bind(window)
 
 function requestAnimationFrame(f) {
   if (reqFrame) return reqFrame(f)

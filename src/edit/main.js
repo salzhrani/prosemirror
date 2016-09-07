@@ -39,7 +39,7 @@ class ProseMirror {
     if (!opts.spellCheck) this.content.spellcheck = false
     // :: DOMNode
     // The outer DOM element of the editor.
-    this.wrapper = elt("div", {class: "ProseMirror"}, this.content)
+    this.wrapper = elt("div", {class: "ProseMirror"})
     this.wrapper.ProseMirror = this
 
     // :: Object<Subscription>
@@ -159,6 +159,7 @@ class ProseMirror {
     else if (opts.place)
       opts.place(this.wrapper)
 
+    this.wrapper.appendChild(this.content);
     this.setDocInner(opts.doc)
     draw(this, this.doc)
     this.content.contentEditable = true
