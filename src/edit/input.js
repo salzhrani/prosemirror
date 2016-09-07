@@ -197,9 +197,9 @@ function handleTripleClick(pm, context) {
   }
 }
 
-function runHandlerOnContext(handler, context) {
+function runHandlerOnContext(handler, context, event) {
   for (let i = context.inside.length - 1; i >= 0; i--)
-    if (handler.dispatch(context.pos, context.inside[i].node, context.inside[i].pos))
+    if (handler.dispatch(context.pos, context.inside[i].node, context.inside[i].pos, event))
       return true
 }
 
@@ -217,7 +217,7 @@ handlers.mousedown = (pm, e) => {
     e.preventDefault()
     handleTripleClick(pm, context)
   } else if (doubleClick) {
-    if (runHandlerOnContext(pm.on.doubleClickOn, context) || pm.on.doubleClick.dispatch(context.pos))
+    if (runHandlerOnContext(pm.on.doubleClickOn, context, e) || pm.on.doubleClick.dispatch(context.pos, e))
       e.preventDefault()
     else
       pm.sel.fastPoll()
@@ -239,7 +239,7 @@ class MouseDown {
     this.target = event.target
     if (this.mightDrag) {
       if (!contains(pm.content, this.target))
-        this.target = document.elementFromPoint(this.x, this.y)
+        this.target = pm.root.elementFromPoint(this.x, this.y)
       this.target.draggable = true
       if (browser.gecko && (this.setContentEditable = !this.target.hasAttribute("contentEditable")))
         this.target.setAttribute("contentEditable", "false")
@@ -269,8 +269,8 @@ class MouseDown {
     let context = contextFromEvent(this.pm, event)
     if (this.event.ctrlKey && selectClickedNode(this.pm, context)) {
       event.preventDefault()
-    } else if (runHandlerOnContext(this.pm.on.clickOn, this.context) ||
-               this.pm.on.click.dispatch(this.context.pos)) {
+    } else if (runHandlerOnContext(this.pm.on.clickOn, this.context, event) ||
+               this.pm.on.click.dispatch(this.context.pos, event)) {
       event.preventDefault()
     } else {
       let inner = this.context.inside[this.context.inside.length - 1]
@@ -299,7 +299,7 @@ handlers.contextmenu = (pm, e) => {
   let context = contextFromEvent(pm, e)
   if (context) {
     let inner = context.inside[context.inside.length - 1]
-    if (pm.on.contextMenu.dispatch(context.pos, inner ? inner.node : pm.doc))
+    if (pm.on.contextMenu.dispatch(context.pos, inner ? inner.node : pm.doc, e))
       e.preventDefault()
   }
 }
@@ -471,7 +471,7 @@ handlers.copy = handlers.cut = (pm, e) => {
 }
 
 handlers.paste = (pm, e) => {
-  if (!hasFocus(pm)) return
+  if (!hasFocus(pm) || pm.on.domPaste.dispatch(e)) return
   if (!e.clipboardData) {
     if (browser.ie && browser.ie_version <= 11) readInputSoon(pm)
     return
@@ -549,8 +549,8 @@ handlers.dragover = handlers.dragenter = (pm, e) => {
   if (!target)
     target = pm.input.dropTarget = pm.wrapper.appendChild(elt("div", {class: "ProseMirror-drop-target"}))
 
-  let pos = dropPos(pm.input.dragging && pm.input.dragging.slice,
-                    pm.doc.resolve(pm.posAtCoords({left: e.clientX, top: e.clientY})))
+  let mousePos = pm.posAtCoords({left: e.clientX, top: e.clientY})
+  let pos = mousePos == null ? null : dropPos(pm.input.dragging && pm.input.dragging.slice, pm.doc.resolve(mousePos))
   if (pos == null) return
   let coords = pm.coordsAtPos(pos)
   let rect = pm.wrapper.getBoundingClientRect()

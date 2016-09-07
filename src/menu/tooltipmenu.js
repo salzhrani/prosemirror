@@ -71,7 +71,7 @@ class TooltipMenu {
   }
 
   selectionCoords() {
-    let pos = this.config.position == "above" ? topCenterOfSelection() : bottomCenterOfSelection()
+    let pos = this.config.position == "above" ? topCenterOfSelection(this.pm.root) : bottomCenterOfSelection(this.pm.root)
     if (pos.top != 0) return pos
     let realPos = this.pm.coordsAtPos(this.pm.selection.from)
     return {left: realPos.left, top: this.config.position == "above" ? realPos.top : realPos.bottom}
@@ -115,8 +115,8 @@ class TooltipMenu {
 }
 
 // Get the x and y coordinates at the top center of the current DOM selection.
-function topCenterOfSelection() {
-  let range = window.getSelection().getRangeAt(0), rects = range.getClientRects()
+function topCenterOfSelection(root) {
+  let range = root.getSelection().getRangeAt(0), rects = range.getClientRects()
   if (!rects.length) return range.getBoundingClientRect()
   let left, right, top, bottom
   for (let i = 0; i < rects.length; i++) {
@@ -134,8 +134,8 @@ function topCenterOfSelection() {
   return {top, left: (left + right) / 2}
 }
 
-function bottomCenterOfSelection() {
-  let range = window.getSelection().getRangeAt(0), rects = range.getClientRects()
+function bottomCenterOfSelection(root) {
+  let range = root.getSelection().getRangeAt(0), rects = range.getClientRects()
   if (!rects.length) {
     let rect = range.getBoundingClientRect()
     return {left: rect.left, top: rect.bottom}

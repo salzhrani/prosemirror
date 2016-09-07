@@ -260,6 +260,10 @@ class Node {
   // True when this is a text node.
   get isText() { return this.type.isText }
 
+  // :: bool
+  // True when this is a leaf node.
+  get isLeaf() { return this.type.isLeaf }
+
   // :: () → string
   // Return a string representation of this node for debugging
   // purposes.
@@ -362,9 +366,14 @@ class TextNode extends Node {
     return new TextNode(this.type, this.attrs, this.text, marks)
   }
 
+  withText(text) {
+    if (text == this.text) return this
+    return new TextNode(this.type, this.attrs, text, this.marks)
+  }
+
   cut(from = 0, to = this.text.length) {
     if (from == 0 && to == this.text.length) return this
-    return this.copy(this.text.slice(from, to))
+    return this.withText(this.text.slice(from, to))
   }
 
   eq(other) {

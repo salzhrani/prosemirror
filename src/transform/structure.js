@@ -5,7 +5,7 @@ const {ReplaceStep, ReplaceAroundStep} = require("./replace_step")
 
 function canCut(node, start, end) {
   return (start == 0 || node.canReplace(start, node.childCount)) &&
-    (end == node.childCount || node.canReplace(0, start))
+    (end == node.childCount || node.canReplace(0, end))
 }
 
 // :: (NodeRange) → ?number
@@ -191,7 +191,7 @@ function joinable(doc, pos) {
 exports.joinable = joinable
 
 function canJoin(a, b) {
-  return a && b && !a.isText && a.canAppend(b)
+  return a && b && !a.isLeaf && a.canAppend(b)
 }
 
 // :: (Node, number, ?number) → ?number

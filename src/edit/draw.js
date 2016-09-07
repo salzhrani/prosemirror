@@ -28,53 +28,53 @@ function options(ranges) {
     },
     // : (Node, DOMNode, number, number) → DOMNode
     renderInlineFlat(node, dom, pos, offset) {
-      ranges.advanceTo(pos)
-      let end = pos + node.nodeSize
-      let nextCut = ranges.nextChangeBefore(end)
+      if (dom.nodeType != 1) dom = elt("span", null, dom)
 
-      let inner = dom, wrapped
-      for (let i = 0; i < node.marks.length; i++) inner = inner.firstChild
+      let end = pos + node.nodeSize, fragment
+      for (;;) {
+        ranges.advanceTo(pos)
+        let nextCut = ranges.nextChangeBefore(end), nextDOM, size
+        if (nextCut > -1) {
+          size = nextCut - pos
+          nextDOM = splitTextNode(dom, size)
+        } else {
+          size = end - pos
+        }
 
-      if (dom.nodeType != 1) {
-        dom = elt("span", null, dom)
-        if (nextCut == -1) wrapped = dom
-      }
-      if (!wrapped && (nextCut > -1 || ranges.current.length)) {
-        wrapped = inner == dom ? (dom = elt("span", null, inner))
-                               : inner.parentNode.appendChild(elt("span", null, inner))
-      }
-
-      dom.setAttribute("pm-offset", offset)
-      dom.setAttribute("pm-size", node.nodeSize)
-
-      let inlineOffset = 0
-      while (nextCut > -1) {
-        let size = nextCut - pos
-        let split = splitSpan(wrapped, size)
+        dom.setAttribute("pm-offset", offset)
+        dom.setAttribute("pm-size", size)
         if (ranges.current.length)
-          split.className = ranges.current.join(" ")
-        split.setAttribute("pm-inner-offset", inlineOffset)
-        inlineOffset += size
-        ranges.advanceTo(nextCut)
-        nextCut = ranges.nextChangeBefore(end)
-        if (nextCut == -1)
-          wrapped.setAttribute("pm-inner-offset", inlineOffset)
+          dom.className = ranges.current.join(" ")
+
+        if (!fragment && (nextCut > -1 || ranges.element))
+          fragment = document.createDocumentFragment()
+        if (ranges.element)
+          fragment.appendChild(elt("span", {contenteditable: false, "pm-ignore": true}, ranges.element))
+        if (fragment)
+          fragment.appendChild(dom)
+
+        if (nextCut == -1) break
+        offset += size
         pos += size
+        dom = nextDOM
       }
 
-      if (ranges.current.length)
-        wrapped.className = ranges.current.join(" ")
-      return dom
+      return fragment || dom
     },
     document
   }
 }
 
-function splitSpan(span, at) {
-  let textNode = span.firstChild, text = textNode.nodeValue
-  let newNode = span.parentNode.insertBefore(elt("span", null, text.slice(0, at)), span)
-  textNode.nodeValue = text.slice(at)
-  return newNode
+function splitTextNode(dom, at) {
+  if (dom.nodeType == 3) {
+    let text = document.createTextNode(dom.nodeValue.slice(at))
+    dom.nodeValue = dom.nodeValue.slice(0, at)
+    return text
+  } else {
+    let clone = dom.cloneNode(false)
+    clone.appendChild(splitTextNode(dom.firstChild, at))
+    return clone
+  }
 }
 
 function draw(pm, doc) {
@@ -137,8 +137,8 @@ function redraw(pm, dirty, doc, prev) {
       if (found > -1) {
         matching = child
         while (iPrev != found) {
-          oPrev += prev.child(iPrev).nodeSize
-          iPrev++
+          oPrev += pChild.nodeSize
+          pChild = prev.maybeChild(++iPrev)
         }
       }
 
@@ -148,6 +148,7 @@ function redraw(pm, dirty, doc, prev) {
         reuseDOM = true
         if (!pChild.type.isLeaf)
           scan(childContainer(domPos), child, pChild, pos + offset + 1)
+        domPos.setAttribute("pm-size", child.nodeSize)
       } else {
         opts.pos = pos + offset
         opts.offset = offset
@@ -157,10 +158,20 @@ function redraw(pm, dirty, doc, prev) {
       }
 
       if (reuseDOM) {
-        domPos.setAttribute("pm-offset", offset)
-        domPos.setAttribute("pm-size", child.nodeSize)
-        domPos = domPos.nextSibling
-        oPrev += prev.child(iPrev).nodeSize
+        // Text nodes might be split into smaller segments
+        if (child.isText) {
+          for (let off = offset, end = off + child.nodeSize; off < end;) {
+            if (offset != oPrev)
+              domPos.setAttribute("pm-offset", off)
+            off += +domPos.getAttribute("pm-size")
+            domPos = domPos.nextSibling
+          }
+        } else {
+          if (offset != oPrev)
+            domPos.setAttribute("pm-offset", offset)
+          domPos = domPos.nextSibling
+        }
+        oPrev += pChild.nodeSize
         pChild = prev.maybeChild(++iPrev)
       }
       offset += child.nodeSize

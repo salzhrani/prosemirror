@@ -109,6 +109,19 @@ class PosMap {
     return false
   }
 
+  // :: ((oldStart: number, oldEnd: number, newStart: number, newEnd: number))
+  // Calls the given function on each of the changed ranges denoted by
+  // this map.
+  forEach(f) {
+    let oldIndex = this.inverted ? 2 : 1, newIndex = this.inverted ? 1 : 2
+    for (let i = 0, diff = 0; i < this.ranges.length; i += 3) {
+      let start = this.ranges[i], oldStart = start - (this.inverted ? diff : 0), newStart = start + (this.inverted ? 0 : diff)
+      let oldSize = this.ranges[i + oldIndex], newSize = this.ranges[i + newIndex]
+      f(oldStart, oldStart + oldSize, newStart, newStart + newSize)
+      diff += newSize - oldSize
+    }
+  }
+
   // :: () → PosMap
   // Create an inverted version of this map. The result can be used to
   // map positions in the post-step document to the pre-step document.
@@ -131,45 +144,36 @@ PosMap.empty = new PosMap([])
 // collaboration or history management.) This class implements
 // `Mappable`.
 class Remapping {
-  // :: (?[PosMap], ?[PosMap])
-  constructor(head = [], tail = []) {
+  // :: (?[PosMap], ?number)
+  // Create a new remapping with the given position maps, with its
+  // current start index pointing at `mapFrom`.
+  constructor(maps, mapFrom = 0, mirror) {
     // :: [PosMap]
-    // The maps in the head of the mapping are applied to input
-    // positions first, back-to-front. So the map at the end of this
-    // array (if any) is the very first one applied.
-    this.head = head
-    // :: [PosMap]
-    // The maps in the tail are applied last, front-to-back.
-    this.tail = tail
-    this.mirror = Object.create(null)
+    this.maps = maps || []
+    // :: number
+    // The current starting position in the `maps` array, used when
+    // `map` or `mapResult` is called.
+    this.mapFrom = mapFrom
+    this.mirror = mirror
   }
 
-  // :: (PosMap, ?number) → number
-  // Add a map to the mapping's front. If this map is the mirror image
-  // (produced by an inverted step) of another map in this mapping,
-  // that map's id (as returned by this method or
-  // [`addToBack`](#Remapping.addToBack)) should be passed as a second
-  // parameter to register the correspondence.
-  addToFront(map, corr) {
-    this.head.push(map)
-    let id = -this.head.length
-    if (corr != null) this.mirror[id] = corr
-    return id
+  getMirror(n) {
+    if (this.mirror) for (let i = 0; i < this.mirror.length; i++)
+      if (this.mirror[i] == n) return this.mirror[i + (i % 2 ? -1 : 1)]
   }
 
-  // :: (PosMap, ?number) → number
-  // Add a map to the mapping's back. If the map is the mirror image
-  // of another mapping in this object, the id of that map should be
-  // passed to register the correspondence.
-  addToBack(map, corr) {
-    this.tail.push(map)
-    let id = this.tail.length - 1
-    if (corr != null) this.mirror[corr] = id
-    return id
+  setMirror(n, m) {
+    if (!this.mirror) this.mirror = []
+    this.mirror.push(n, m)
   }
 
-  get(id) {
-    return id < 0 ? this.head[-id - 1] : this.tail[id]
+  // :: (PosMap, ?number)
+  // Add a map to the end of this remapping. If `mirrors` is given, it
+  // should be the index of the map that is the mirror image of this
+  // one.
+  appendMap(map, mirrors) {
+    this.maps.push(map)
+    if (mirrors != null) this.setMirror(this.maps.length - 1, mirrors)
   }
 
   // :: (number, ?number) → MapResult
@@ -179,26 +183,30 @@ class Remapping {
 
   // :: (number, ?number) → number
   // Map a position through this remapping.
-  map(pos, bias) { return this._map(pos, bias, true) }
+  map(pos, bias) {
+    if (this.mirror) return this._map(pos, bias, true)
+    for (let i = this.mapFrom; i < this.maps.length; i++)
+      pos = this.maps[i].map(pos, bias)
+    return pos
+  }
 
   _map(pos, bias, simple) {
     let deleted = false, recoverables = null
 
-    for (let i = -this.head.length; i < this.tail.length; i++) {
-      let map = this.get(i), rec
-
-      if ((rec = recoverables && recoverables[i]) != null && map.touches(pos, rec)) {
+    for (let i = this.mapFrom; i < this.maps.length; i++) {
+      let map = this.maps[i], rec = recoverables && recoverables[i]
+      if (rec != null && map.touches(pos, rec)) {
         pos = map.recover(rec)
         continue
       }
 
       let result = map.mapResult(pos, bias)
       if (result.recover != null) {
-        let corr = this.mirror[i]
-        if (corr != null) {
+        let corr = this.getMirror(i)
+        if (corr != null && corr > i) {
           if (result.deleted) {
             i = corr
-            pos = this.get(corr).recover(result.recover)
+            pos = this.maps[corr].recover(result.recover)
             continue
           } else {
             ;(recoverables || (recoverables = Object.create(null)))[corr] = result.recover
@@ -211,13 +219,6 @@ class Remapping {
     }
 
     return simple ? pos : new MapResult(pos, deleted)
-  }
-
-  toString() {
-    let maps = []
-    for (let i = -this.head.length; i < this.tail.length; i++)
-      maps.push(i + ":" + this.get(i) + (this.mirror[i] != null ? "->" + this.mirror[i] : ""))
-    return maps.join("\n")
   }
 }
 exports.Remapping = Remapping

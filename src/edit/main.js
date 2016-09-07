@@ -79,25 +79,25 @@ class ProseMirror {
       // :: Subscription<()>
       // Dispatched when the editor loses focus.
       blur: new Subscription,
-      // :: StoppableSubscription<(pos: number)>
+      // :: StoppableSubscription<(pos: number, event: DOMEvent)>
       // Dispatched when the editor is clicked. Return a truthy
       // value to indicate that the click was handled, and no further
       // action needs to be taken.
       click: new StoppableSubscription,
-      // :: StoppableSubscription<(pos: number, node: Node, nodePos: number)>
+      // :: StoppableSubscription<(pos: number, node: Node, nodePos: number, event: DOMEvent)>
       // Dispatched for every node around a click in the editor, before
       // `click` is dispatched, from inner to outer nodes. `pos` is
       // the position neares to the click, `nodePos` is the position
       // directly in front of `node`.
       clickOn: new StoppableSubscription,
-      // :: StoppableSubscription<(pos: number)>
+      // :: StoppableSubscription<(pos: number, event: DOMEvent)>
       // Dispatched when the editor is double-clicked.
       doubleClick: new StoppableSubscription,
-      // :: StoppableSubscription<(pos: number, node: Node, nodePos: number)>
+      // :: StoppableSubscription<(pos: number, node: Node, nodePos: number, event: DOMEvent)>
       // Dispatched for every node around a double click in the
       // editor, before `doubleClick` is dispatched.
       doubleClickOn: new StoppableSubscription,
-      // :: StoppableSubscription<(pos: number, node: Node)>
+      // :: StoppableSubscription<(pos: number, node: Node, event: DOMEvent)>
       // Dispatched when the context menu is opened on the editor.
       // Return a truthy value to indicate that you handled the event.
       contextMenu: new StoppableSubscription,
@@ -148,6 +148,11 @@ class ProseMirror {
       // Dispatched when the set of [active marks](#ProseMirror.activeMarks) changes.
       activeMarkChange: new Subscription,
       // :: StoppableSubscription<(DOMEvent)>
+      // Dispatched when a DOM `paste` event happens on the editor.
+      // Handlers may declare the event as being handled by calling
+      // `preventDefault` on it or returning a truthy value.
+      domPaste: new DOMSubscription,
+      // :: StoppableSubscription<(DOMEvent)>
       // Dispatched when a DOM `drop` event happens on the editor.
       // Handlers may declare the event as being handled by calling
       // `preventDefault` on it or returning a truthy value.
@@ -160,6 +165,9 @@ class ProseMirror {
       opts.place(this.wrapper)
 
     this.wrapper.appendChild(this.content);
+
+    this._root = null
+
     this.setDocInner(opts.doc)
     draw(this, this.doc)
     this.content.contentEditable = true
@@ -185,6 +193,20 @@ class ProseMirror {
     this.options.keymaps.forEach(map => this.addKeymap(map, -100))
 
     this.options.plugins.forEach(plugin => plugin.attach(this))
+  }
+
+  // :: DOMDocument
+  // The root document that the editor is part of. Initialized lazily
+  // (falling back to the top-level document until the editor is
+  // placed in the DOM) to make sure asynchronously adding the editor
+  // to a shadow DOM works correctly.
+  get root() {
+    let cached = this._root
+    if (cached == null) for (let search = this.wrapper.parentNode; search; search = search.parentNode) {
+      if (search.nodeType == 9 || (search.nodeType == 11 && search.host))
+        return this._root = search
+    }
+    return cached || document
   }
 
   // :: (string) → any
@@ -338,7 +360,7 @@ class ProseMirror {
   flush() {
     this.unscheduleFlush()
 
-    if (!document.body.contains(this.wrapper) || !this.operation) return false
+    if (!this.root.contains(this.wrapper) || !this.operation) return false
     this.on.flushing.dispatch()
 
     let op = this.operation, redrawn = false
@@ -471,7 +493,7 @@ class ProseMirror {
   // Query whether the editor has focus.
   hasFocus() {
     if (this.sel.range instanceof NodeSelection)
-      return document.activeElement == this.content
+      return this.root.activeElement == this.content
     else
       return hasFocus(this)
   }
@@ -496,13 +518,13 @@ class ProseMirror {
     let result = mappedPosAtCoords(this, coords)
     if (!result) return null
 
-    let $pos = this.doc.resolve(result.inside == null ? result.pos : result.inside), inside = []
+    let $pos = this.doc.resolve(result.inLeaf == -1 ? result.pos : result.inLeaf), inside = []
     for (let i = 1; i <= $pos.depth; i++)
       inside.push({pos: $pos.before(i), node: $pos.node(i)})
-    if (result.inside != null) {
+    if (result.inLeaf > -1) {
       let after = $pos.nodeAfter
       if (after && !after.isText && after.type.isLeaf)
-        inside.push({pos: result.inside, node: after})
+        inside.push({pos: result.inLeaf, node: after})
     }
     return {pos: result.pos, inside}
   }
@@ -595,7 +617,7 @@ function mappedPosAtCoords(pm, coords) {
   // document
   if (pm.operation)
     return {pos: mapThrough(pm.operation.mappings, result.pos),
-            inside: result.inside == null ? null : mapThrough(pm.operation.mappings, result.inside)}
+            inLeaf: result.inLeaf < 0 ? null : mapThrough(pm.operation.mappings, result.inLeaf)}
   else
     return result
 }
