@@ -7,7 +7,10 @@ var gen = 0
 
 window.done = false
 window.results = {errors: [], passed: 0, failed:0}
-
+window.onerror = function(err) {
+  window.results.errors.push('global error: ' + err);
+  window.done = true;
+}
 function runTests() {
   window.done = false
   var filters = document.location.hash.slice(1).split(",")
