@@ -15,14 +15,14 @@ function testBrowser(browserName) {
 	console.log('got page')
 	function checkIsDone() {
 		console.log('check done');
-		browser.eval('JSON.stringify(window.done)', (err, res) => {
+		browser.executeScript('return JSON.stringify(window.done)', (err, res) => {
 			if (err) {
 				throw err
 			}
 			res = JSON.parse(res);
 			console.log('res', res);
 			if (res === true) {
-				browser.eval('JSON.stringify(window.results)', (err, results) => {
+				browser.executeScript('return JSON.stringify(window.results)', (err, results) => {
 					results = JSON.parse(results);
 					console.log('results', results);
 					browser.quit();
