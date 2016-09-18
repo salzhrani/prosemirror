@@ -5,7 +5,11 @@ require("../src/test/browser/all")
 
 var gen = 0
 
+window.done = false
+window.results = {errors: [], passed: 0, failed:0}
+
 function runTests() {
+  window.done = false
   var filters = document.location.hash.slice(1).split(",")
   var myGen = ++gen
   var runnable = []
@@ -25,6 +29,7 @@ function runTests() {
 
       try {
         tests.tests[name]()
+        window.results.passed++
       } catch(e) {
         logFailure(name, e)
       }
@@ -42,6 +47,7 @@ function runTests() {
     var status = document.querySelector("#status")
     status.textContent = failed ? failed + " failed" : "All passed"
     status.className = failed ? "bad" : "good"
+    window.done = true
   }
 
   function logFailure(name, err) {
@@ -52,6 +58,8 @@ function runTests() {
     nm.href= "#" + name
     nm.textContent = name
     elt.appendChild(document.createTextNode(": " + err))
+    window.results.failed = failed
+    window.results.errors.puhs(name + ": " + err)
     if (!(err instanceof Failure))
       setTimeout(function() { throw err }, 20)
   }

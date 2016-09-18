@@ -29,10 +29,12 @@
     "moduleserve": "^0.7.0",
     "punycode": "^1.4.0",
     "rimraf": "^2.5.0",
+    "selenium-webdriver": "^3.0.0-beta-2",
     "source-map-support": "^0.2.10"
   },
   "scripts": {
     "test": "node src/test/run.js",
+    "test:ci": "node src/test/run-ci.js",
     "demo": "moduleserve demo",
     "dist": "babel -d dist src",
     "dist-watch": "babel -w -d dist src",

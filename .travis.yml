@@ -6,6 +6,11 @@ sudo: false
 env:
   matrix:
   - TEST_NODE=1 TEST_BROWSERS=1
+before_script:
+  - npm run demo &
+  - sleep 2
+script:
+  - npm run test:ci
 matrix:
   fast_finish: true
 addons:
