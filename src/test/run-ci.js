@@ -23,7 +23,7 @@ function testBrowser(caps) {
 						console.log("Ran " + results.passed + " tests on (" + caps.browserName + ', ' + caps.platform + ') all passed');
 						process.exit(0);
 					} else {
-						console.log("Ran " + (results.passed + results.failed) + " tests on " + browserName + ', ' + results.failed + ' failed.\n');
+						console.log("Ran " + (results.passed + results.failed) + " tests on (" + caps.browserName + ', ' + caps.platform + '), ' + results.failed + ' failed.\n');
 						console.log(results.errors.join('\n'))
 						process.exit(1);
 					}
