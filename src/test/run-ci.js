@@ -10,19 +10,21 @@ function testBrowser(browserName) {
         accessKey: process.env.SAUCE_ACCESS_KEY,
         browserName: browserName
       }).build();
-	console.log('globals?',describe, done)
 	console.log('built browser, getting page')
 	browser.get("http://localhost:8080/test")
 	console.log('got page')
 	function checkIsDone() {
+		console.log('check done');
 		browser.eval('JSON.stringify(window.done)', (err, res) => {
 			if (err) {
 				throw err
 			}
 			res = JSON.parse(res);
+			console.log('res', res);
 			if (res === true) {
 				browser.eval('JSON.stringify(window.results)', (err, results) => {
 					results = JSON.parse(results);
+					console.log('results', results);
 					browser.quit();
 					if (results.failed < 1) {
 						console.log("Ran " + results.passed + " tests on " + browserName + ' all passed');
