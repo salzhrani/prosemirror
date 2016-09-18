@@ -72,4 +72,4 @@ testBrowser({
 	platform: 'Windows 10',
 	version: '13.10586',
 }))
-,then(() => process.exit(0), () => process.exit(1))
+.then(() => process.exit(0), () => process.exit(1))
