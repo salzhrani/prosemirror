@@ -1,32 +1,26 @@
 let webdriver = require("selenium-webdriver")
 
-function testBrowser(browserName) {
+function testBrowser(caps) {
 	let browser = new webdriver.Builder()
 	.usingServer('http://'+ process.env.SAUCE_USERNAME+':'+process.env.SAUCE_ACCESS_KEY+'@ondemand.saucelabs.com:80/wd/hub')
-      .withCapabilities({
+      .withCapabilities(Object.assign({}, caps, {
         'tunnel-identifier': process.env.TRAVIS_JOB_NUMBER,
         build: process.env.TRAVIS_BUILD_NUMBER,
         username: process.env.SAUCE_USERNAME,
         accessKey: process.env.SAUCE_ACCESS_KEY,
-        browserName: browserName
-      }).build();
-	console.log('built browser, getting page')
+	  })).build();
 	browser.get("http://localhost:8080/test")
-	console.log('got page')
 	function checkIsDone() {
-		console.log('check done');
 		browser.executeScript('return JSON.stringify(window.done)')
 		.then((res) => {
 			res = JSON.parse(res);
-			console.log('res', res);
 			if (res === true) {
 				browser.executeScript('return JSON.stringify(window.results)')
 				.then((results) => {
 					results = JSON.parse(results);
-					console.log('results', results);
 					browser.quit();
 					if (results.failed < 1) {
-						console.log("Ran " + results.passed + " tests on " + browserName + ' all passed');
+						console.log("Ran " + results.passed + " tests on (" + caps.browserName + ', ' + caps.platform + ') all passed');
 						process.exit(0);
 					} else {
 						console.log("Ran " + (results.passed + results.failed) + " tests on " + browserName + ', ' + results.failed + ' failed.\n');
@@ -45,4 +39,8 @@ function testBrowser(browserName) {
 	checkIsDone()
 }
 
-testBrowser('chrome');
+testBrowser({
+	browserName: 'chrome',
+	platform: 'OS X 10.11',
+	version: 'beta',
+});
