@@ -17,12 +17,12 @@ function testBrowser(browserName) {
 		console.log('checking');
 		try {
 			var res = browser.executeScript('return JSON.stringify(window.done)')
-			res = JSON.parse(res)
 			console.log('res', res)
+			res = JSON.parse(res)
 			if (res === true) {
 				var results = browser.executeScript('return JSON.stringify(window.results)')
-				results = JSON.parse(results)
 				console.log('results', results)
+				results = JSON.parse(results)
 				browser.quit()
 				if (results.failed < 1) {
 					console.log("Ran " + results.passed + " tests on " + browserName + ' all passed');
