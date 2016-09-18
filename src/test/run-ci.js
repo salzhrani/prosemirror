@@ -42,6 +42,7 @@ function testBrowser(browserName) {
 			}
 		})
 	}
+	checkIsDone()
 }
 
 testBrowser('chrome');
