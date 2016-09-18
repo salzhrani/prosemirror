@@ -14,33 +14,33 @@ function testBrowser(browserName) {
 	browser.get("http://localhost:8080/test")
 	console.log('got page')
 	function checkIsDone() {
-		console.log('check done');
-		browser.executeScript('return JSON.stringify(window.done)', (err, res) => {
-			if (err) {
-				throw err
-			}
-			res = JSON.parse(res);
-			console.log('res', res);
+		console.log('checking');
+		try {
+			var res = browser.executeScript('return JSON.stringify(window.done)')
+			res = JSON.parse(res)
+			console.log('res', res)
 			if (res === true) {
-				browser.executeScript('return JSON.stringify(window.results)', (err, results) => {
-					results = JSON.parse(results);
-					console.log('results', results);
-					browser.quit();
-					if (results.failed < 1) {
-						console.log("Ran " + results.passed + " tests on " + browserName + ' all passed');
-						process.exit(0);
-					} else {
-						console.log("Ran " + (results.passed + results.failed) + " tests on " + browserName + ', ' + results.failed + ' failed.\n');
-						console.log(results.errors.join('\n'))
-						process.exit(1);
-					}
-				})
+				var results = browser.executeScript('return JSON.stringify(window.results)')
+				results = JSON.parse(results)
+				console.log('results', results)
+				browser.quit()
+				if (results.failed < 1) {
+					console.log("Ran " + results.passed + " tests on " + browserName + ' all passed');
+					process.exit(0)
+				} else {
+					console.log("Ran " + (results.passed + results.failed) + " tests on " + browserName + ', ' + results.failed + ' failed.\n');
+					console.log(results.errors.join('\n'))
+					process.exit(1);
+				}
 			} else {
 				setTimeout(function() {
 					checkIsDone();
 				}, 1000);
 			}
-		})
+		} catch(e) {
+			console.log('Error: ' + e);
+			process.exit(1);
+		}
 	}
 	checkIsDone()
 }
