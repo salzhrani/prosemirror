@@ -12,12 +12,13 @@ function testBrowser(browserName) {
       }).build();
 	browser.get("http://localhost:8080/test")
 	function checkIsDone() {
-		browser.eval('window.done', (err, res) => {
+		browser.eval('JSON.stringify(window.done)', (err, res) => {
 			if (err) {
 				throw err
 			}
+			res = JSON.parse(res);
 			if (res === true) {
-				browser.eval('window.results', (err, results) => {
+				browser.eval('JSON.stringify(window.results)', (err, results) => {
 					results = JSON.parse(results);
 					if (results.failed < 1) {
 						console.log("Ran " + results.passed + " tests on " + browserName + ' all passed');
