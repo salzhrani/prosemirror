@@ -1,7 +1,7 @@
-var tests = require("../src/test/tests")
-var Failure = require("../src/test/failure").Failure
-require("../src/test/all")
-require("../src/test/browser/all")
+var tests = require("../dist/test/tests")
+var Failure = require("../dist/test/failure").Failure
+require("../dist/test/all")
+require("../dist/test/browser/all")
 
 var gen = 0
 
@@ -37,7 +37,7 @@ function runTests() {
         logFailure(name, e)
       }
       if (Date.now() > t0 + 200) {
-        setTimeout(() => run(i + 1), 50)
+        setTimeout(function(){ run(i + 1)}, 50)
         return
       }
     }
@@ -62,12 +62,12 @@ function runTests() {
     nm.textContent = name
     elt.appendChild(document.createTextNode(": " + err))
     window.results.failed = failed
-    window.results.errors.puhs(name + ": " + err)
+    window.results.errors.push(name + ": " + err)
     if (!(err instanceof Failure))
       setTimeout(function() { throw err }, 20)
   }
 
-  setTimeout(() => run(0), 50)
+  setTimeout(function(){ run(0) }, 50)
 }
 
 runTests()
