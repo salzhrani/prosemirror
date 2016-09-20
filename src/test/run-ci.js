@@ -7,10 +7,7 @@ function testBrowser(caps) {
     'tunnel-identifier': process.env.TRAVIS_JOB_NUMBER,
     build: process.env.TRAVIS_BUILD_NUMBER,
     username: process.env.SAUCE_USERNAME,
-    accessKey: process.env.SAUCE_ACCESS_KEY,
-    loggingPrefs: {
-      browser: "ALL"
-    }
+    accessKey: process.env.SAUCE_ACCESS_KEY
   })).buildAsync()
   .then(browser => {
     console.log('getting');
@@ -84,9 +81,9 @@ Promise.all([
   //   version: 'beta'
   // }),
   testBrowser({
-    browserName: 'MicrosoftEdge',
+    browserName: 'internet explorer',
     platform: 'Windows 10',
-    version: '13.10586'
+    version: '11.103'
   })
 ])
 .then((results) => {
