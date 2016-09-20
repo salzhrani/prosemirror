@@ -29,13 +29,13 @@ function testBrowser(caps) {
 						} else {
 							reject("Ran " + (results.passed + results.failed) + " tests on (" + caps.browserName + ', ' + caps.platform + '), ' + results.failed + ' failed.\n' + results.errors.join('\n'))
 						}
-					})
+					}, reject)
 				} else {
 					setTimeout(function() {
 						checkIsDone()
 					}, 1000)
 				}
-			})
+			}, reject)
 		}
 		checkIsDone()
 	})
