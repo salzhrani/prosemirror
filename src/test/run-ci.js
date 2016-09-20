@@ -79,7 +79,7 @@ Promise.all([
   // })
 ])
 .then((results) => {
-  console.log('Results:\n');
+  console.log('Results:\n', results);
   if (results.filter(result => !result.error).length) {
     process.exit(1)
   } else {
