@@ -77,11 +77,11 @@ Promise.all([
   //   platform: 'OS X 10.11',
   //   version: 'beta'
   // }),
-  // testBrowser({
-  //   browserName: 'MicrosoftEdge',
-  //   platform: 'Windows 10',
-  //   version: '13.10586'
-  // })
+  testBrowser({
+    browserName: 'MicrosoftEdge',
+    platform: 'Windows 10',
+    version: '13.10586'
+  })
 ])
 .then((results) => {
   console.log('Results:\n');
