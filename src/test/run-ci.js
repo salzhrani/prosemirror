@@ -1,28 +1,27 @@
 let webdriver = require("selenium-webdriver")
 
 function testBrowser(caps) {
-	// return new Promise((resolve, reject) => {
-    return new webdriver.Builder()
-		.usingServer('http://'+ process.env.SAUCE_USERNAME+':'+process.env.SAUCE_ACCESS_KEY+'@ondemand.saucelabs.com:80/wd/hub')
-		.withCapabilities(Object.assign({}, caps, {
-			'tunnel-identifier': process.env.TRAVIS_JOB_NUMBER,
-			build: process.env.TRAVIS_BUILD_NUMBER,
-			username: process.env.SAUCE_USERNAME,
-			accessKey: process.env.SAUCE_ACCESS_KEY
-		})).buildAsync()
-    .then(browser => {
-      console.log('getting');
-      return browser.get("http://localhost:8080/test")
-      .then(() => browser)
-    })
-    .then((browser) => {
-      console.log('get', browser);
+  return new webdriver.Builder()
+  .usingServer('http://'+ process.env.SAUCE_USERNAME+':'+process.env.SAUCE_ACCESS_KEY+'@ondemand.saucelabs.com:80/wd/hub')
+  .withCapabilities(Object.assign({}, caps, {
+    'tunnel-identifier': process.env.TRAVIS_JOB_NUMBER,
+    build: process.env.TRAVIS_BUILD_NUMBER,
+    username: process.env.SAUCE_USERNAME,
+    accessKey: process.env.SAUCE_ACCESS_KEY
+  })).buildAsync()
+  .then(browser => {
+    console.log('getting');
+    return browser.get("http://localhost:8080/test")
+    .then(() => browser)
+  })
+  .then((browser) => {
+    console.log('got browser', !!browser);
+    return new Promise((resolve, reject) => {
       function checkIsDone() {
-      console.log('executeScript');
-			browser.executeScript('return JSON.stringify(window.done)')
-			.then((res) => {
-        console.log('res', res);
-        return new Promise((resolve, reject) => {
+        console.log('executeScript');
+        browser.executeScript('return JSON.stringify(window.done)')
+        .then((res) => {
+          console.log('res', res);
           res = JSON.parse(res)
           if (res === true) {
             browser.executeScript('return JSON.stringify(window.results)')
@@ -42,10 +41,10 @@ function testBrowser(caps) {
             }, 1000)
           }
         })
-			}, e => reject(e))
-		}
-		checkIsDone()
-    }, e => reject(e))
+      }
+      checkIsDone()
+    })
+  })
 }
 Promise.all([
   testBrowser({
@@ -53,31 +52,31 @@ Promise.all([
     platform: 'OS X 10.11',
     version: 'beta'
   }),
-  testBrowser({
-    browserName: 'chrome',
-    platform: 'Windows 10',
-    version: 'beta'
-  }),
-  testBrowser({
-    browserName: 'chrome',
-    platform: 'Linux',
-    version: '48.0'
-  }),
-  testBrowser({
-    browserName: 'safari',
-    platform: 'OS X 10.11',
-    version: '9.0'
-  }),
-  testBrowser({
-    browserName: 'firefox',
-    platform: 'OS X 10.11',
-    version: 'beta'
-  }),
-  testBrowser({
-    browserName: 'MicrosoftEdge',
-    platform: 'Windows 10',
-    version: '13.10586'
-  })
+  // testBrowser({
+  //   browserName: 'chrome',
+  //   platform: 'Windows 10',
+  //   version: 'beta'
+  // }),
+  // testBrowser({
+  //   browserName: 'chrome',
+  //   platform: 'Linux',
+  //   version: '48.0'
+  // }),
+  // testBrowser({
+  //   browserName: 'safari',
+  //   platform: 'OS X 10.11',
+  //   version: '9.0'
+  // }),
+  // testBrowser({
+  //   browserName: 'firefox',
+  //   platform: 'OS X 10.11',
+  //   version: 'beta'
+  // }),
+  // testBrowser({
+  //   browserName: 'MicrosoftEdge',
+  //   platform: 'Windows 10',
+  //   version: '13.10586'
+  // })
 ])
 .then((results) => {
   console.log('Results:\n');
@@ -87,7 +86,7 @@ Promise.all([
     process.exit(0)
   }
 })
-.catch((results) => {
+.catch((e) => {
   console.log('Error:\n', e)
   process.exit(1)
 })
