@@ -28,13 +28,18 @@ function testBrowser(caps) {
             .then((results) => {
               console.log('results', results);
               results = JSON.parse(results)
+              browser.close()
               browser.quit()
               if (results.failed < 1) {
-                resolve({error: false, message: "Ran " + results.passed + " tests on (" + caps.browserName + ', ' + caps.platform + ') all passed'})
+                resolve({error: false, browser: caps.browserName, message: "Ran " + results.passed + " tests on (" + caps.browserName + ', ' + caps.platform + ') all passed'})
               } else {
-                resolve({error: true, message: "Ran " + (results.passed + results.failed) + " tests on (" + caps.browserName + ', ' + caps.platform + '), ' + results.failed + ' failed.\n' + results.errors.join('\n')})
+                resolve({error: true, browser: caps.browserName, message: "Ran " + (results.passed + results.failed) + " tests on (" + caps.browserName + ', ' + caps.platform + '), ' + results.failed + ' failed.\n' + results.errors.join('\n')})
               }
-            }, reject)
+            }, (e) => {
+              browser.close()
+              browser.quit()
+              reject(e)
+            })
           } else {
             setTimeout(function() {
               checkIsDone()
@@ -79,8 +84,11 @@ Promise.all([
   // })
 ])
 .then((results) => {
-  console.log('Results:\n', results);
-  if (results.filter(result => !result.error).length) {
+  console.log('Results:\n');
+  results.forEach(result => {
+    console.log(result.message);
+  })
+  if (results.filter(result => result.error).length) {
     process.exit(1)
   } else {
     process.exit(0)
