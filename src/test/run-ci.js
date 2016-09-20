@@ -42,9 +42,6 @@ function testBrowser(caps) {
             })
           } else {
             setTimeout(function() {
-              browser.manage().logs().get('browser').then(function(browserLog) {
-                console.log('log: ' + require('util').inspect(browserLog));
-              });
               checkIsDone()
             }, 4000)
           }
