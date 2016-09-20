@@ -43,7 +43,7 @@ function testBrowser(caps) {
           } else {
             setTimeout(function() {
               checkIsDone()
-            }, 1000)
+            }, 4000)
           }
         })
       }
