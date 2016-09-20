@@ -52,11 +52,11 @@ function testBrowser(caps) {
   })
 }
 Promise.all([
-  testBrowser({
-    browserName: 'chrome',
-    platform: 'OS X 10.11',
-    version: 'beta'
-  }),
+  // testBrowser({
+  //   browserName: 'chrome',
+  //   platform: 'OS X 10.11',
+  //   version: 'beta'
+  // }),
   // testBrowser({
   //   browserName: 'chrome',
   //   platform: 'Windows 10',
