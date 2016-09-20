@@ -48,36 +48,37 @@ function testBrowser(caps) {
     }, e => reject(e))
 }
 Promise.all([
-testBrowser({
-	browserName: 'chrome',
-	platform: 'OS X 10.11',
-	version: 'beta'
-}),
-testBrowser({
-	browserName: 'chrome',
-	platform: 'Windows 10',
-	version: 'beta'
-}),
-testBrowser({
-	browserName: 'chrome',
-	platform: 'Linux',
-	version: '48.0'
-}),
-testBrowser({
-	browserName: 'safari',
-	platform: 'OS X 10.11',
-	version: '9.0'
-}),
-testBrowser({
-	browserName: 'firefox',
-	platform: 'OS X 10.11',
-	version: 'beta'
-}),
-testBrowser({
-	browserName: 'MicrosoftEdge',
-	platform: 'Windows 10',
-	version: '13.10586'
-})])
+  testBrowser({
+    browserName: 'chrome',
+    platform: 'OS X 10.11',
+    version: 'beta'
+  }),
+  testBrowser({
+    browserName: 'chrome',
+    platform: 'Windows 10',
+    version: 'beta'
+  }),
+  testBrowser({
+    browserName: 'chrome',
+    platform: 'Linux',
+    version: '48.0'
+  }),
+  testBrowser({
+    browserName: 'safari',
+    platform: 'OS X 10.11',
+    version: '9.0'
+  }),
+  testBrowser({
+    browserName: 'firefox',
+    platform: 'OS X 10.11',
+    version: 'beta'
+  }),
+  testBrowser({
+    browserName: 'MicrosoftEdge',
+    platform: 'Windows 10',
+    version: '13.10586'
+  })
+])
 .then((results) => {
   console.log('Results:\n');
   if (results.filter(result => !result.error).length) {
