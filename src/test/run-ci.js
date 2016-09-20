@@ -10,14 +10,18 @@ function testBrowser(caps) {
 			username: process.env.SAUCE_USERNAME,
 			accessKey: process.env.SAUCE_ACCESS_KEY
 		})).build()
+    console.log('getting');
 		browser.get("http://localhost:8080/test")
 		function checkIsDone() {
+      console.log('executeScript');
 			browser.executeScript('return JSON.stringify(window.done)')
 			.then((res) => {
+        console.log('res', res);
 				res = JSON.parse(res)
 				if (res === true) {
 					browser.executeScript('return JSON.stringify(window.results)')
 					.then((results) => {
+            console.log('results', results);
 						results = JSON.parse(results)
 						browser.quit()
 						if (results.failed < 1) {
@@ -73,4 +77,5 @@ testBrowser({
 }, (results) => {
   console.log(results.join('\n'))
   process.exit(1)
-});
+})
+.catch((e) => console.log('Error', e));
