@@ -7,7 +7,10 @@ function testBrowser(caps) {
     'tunnel-identifier': process.env.TRAVIS_JOB_NUMBER,
     build: process.env.TRAVIS_BUILD_NUMBER,
     username: process.env.SAUCE_USERNAME,
-    accessKey: process.env.SAUCE_ACCESS_KEY
+    accessKey: process.env.SAUCE_ACCESS_KEY,
+    loggingPrefs: {
+      browser: "ALL"
+    }
   })).buildAsync()
   .then(browser => {
     console.log('getting');
@@ -19,7 +22,7 @@ function testBrowser(caps) {
     return new Promise((resolve, reject) => {
       function checkIsDone() {
         console.log('executeScript');
-        browser.executeScript('return JSON.stringify(window.done)')
+        browser.executeScript('return JSON.stringify(window)')
         .then((res) => {
           console.log('res', res);
           res = JSON.parse(res)
@@ -42,6 +45,9 @@ function testBrowser(caps) {
             })
           } else {
             setTimeout(function() {
+              browser.manage().logs().get('browser').then(function(browserLog) {
+                console.log('log: ' + require('util').inspect(browserLog));
+              });
               checkIsDone()
             }, 4000)
           }
