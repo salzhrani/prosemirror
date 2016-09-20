@@ -12,7 +12,8 @@ function testBrowser(caps) {
 		})).build()
     console.log('getting');
 		browser.get("http://localhost:8080/test")
-		function checkIsDone() {
+    .then(() => {
+      function checkIsDone() {
       console.log('executeScript');
 			browser.executeScript('return JSON.stringify(window.done)')
 			.then((res) => {
@@ -25,9 +26,9 @@ function testBrowser(caps) {
 						results = JSON.parse(results)
 						browser.quit()
 						if (results.failed < 1) {
-							resolve("Ran " + results.passed + " tests on (" + caps.browserName + ', ' + caps.platform + ') all passed')
+							resolve({error: false, message: "Ran " + results.passed + " tests on (" + caps.browserName + ', ' + caps.platform + ') all passed'})
 						} else {
-							reject("Ran " + (results.passed + results.failed) + " tests on (" + caps.browserName + ', ' + caps.platform + '), ' + results.failed + ' failed.\n' + results.errors.join('\n'))
+							resolve({error: true, message: "Ran " + (results.passed + results.failed) + " tests on (" + caps.browserName + ', ' + caps.platform + '), ' + results.failed + ' failed.\n' + results.errors.join('\n')})
 						}
 					}, reject)
 				} else {
@@ -35,9 +36,10 @@ function testBrowser(caps) {
 						checkIsDone()
 					}, 1000)
 				}
-			}, reject)
+			}, e => reject(e))
 		}
 		checkIsDone()
+    }, e => reject(e))
 	})
 }
 Promise.all([
@@ -72,10 +74,14 @@ testBrowser({
 	version: '13.10586'
 })])
 .then((results) => {
-  console.log(results.join('\n'))
-  process.exit(0)
-}, (results) => {
-  console.log(results.join('\n'))
+  console.log('Results:\n');
+  if (results.filter(result => !result.error).length) {
+    process.exit(1)
+  } else {
+    process.exit(0)
+  }
+})
+.catch((results) => {
+  console.log('Error:\n', e)
   process.exit(1)
 })
-.catch((e) => console.log('Error', e));
