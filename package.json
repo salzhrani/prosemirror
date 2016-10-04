@@ -23,6 +23,11 @@
     "demo": "moduleserve demo",
     "install": "bin/pm clone",
     "test": "bin/pm test",
+    "test:ci": "bin/pm ci",
+    "test:all": "bin/pm test && bin/pm ci",
     "lint": "bin/pm lint"
+  },
+  "devDependencies": {
+    "mocha-sauce": "git://github.com/pbakaus/mocha-sauce.git"
   }
 }
