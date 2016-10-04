@@ -139,11 +139,12 @@ function runCI() {
 
   let htmlPath = path.join('view', 'test', 'index.html')
   let htmlFile = fs.readFileSync(htmlPath, 'utf8')
-  fs.writeFileSync(htmlPath, htmlFile.replace(/<meta charset=utf8>/, '<meta charset=utf8><script src="node_modules/mocha-sauce/client.js"></script>'), 'utf8');
+  fs.writeFileSync(htmlPath, htmlFile.replace(/mocha.js"><\/script>\n/, 'mocha.js"></script><script src="moduleserve/mod/__/__/node_modules/mocha-sauce/client"></script>'), 'utf8');
 
-  run("cd", ["view", "&&", "npm", "run", "test-server","&"]);
-  // run("npm", []);
-  setTimeout(() => {
+  // run("cd", ["view"]);
+  let server = child.spawn("npm", ["run", "test-server"], {cwd: path.resolve('./view')});
+  setTimeout((result) => {
+    server.kill();
     runner((result) => process.exit(result))  
   }, 1000);
 } 
