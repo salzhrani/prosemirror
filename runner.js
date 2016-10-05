@@ -39,6 +39,8 @@ let sauce = new MochaSauce({
 	url: "http://localhost:8080"
 })
 
+sauce.record(true, true);
+
 browsers.map(browser => sauce.browser(browser))
 
 sauce.on('start', function(browser) {
