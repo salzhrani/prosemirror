@@ -145,7 +145,7 @@ function runCI() {
   let server = child.spawn("npm", ["run", "test-server"], {cwd: path.resolve('./view')});
   setTimeout(() => {
     runner((result) => {
-      server.kill();
+      // server.kill();
       process.exit(result)
     })  
   }, 1000);
