@@ -15,6 +15,7 @@ process.chdir(__dirname + "/..")
 
 let child = require("child_process"), fs = require("fs"), path = require("path")
 let glob = require("glob")
+let runner = require("../runner");
 
 let mods = ["model", "transform", "state", "view",
             "keymap", "inputrules", "history", "collab", "commands",
@@ -32,6 +33,7 @@ else if (command == "test") test()
 else if (command == "push") push()
 else if (command == "grep") grep()
 else if (command == "run") runCmd()
+else if (command == "ci") runCI()
 else if (command == "--help") help(0)
 else help(1)
 
@@ -127,6 +129,27 @@ function test() {
   })
   mocha.run(failures => process.exit(failures))
 }
+
+function runCI() {
+  // FIXME monkey patch to inject sauce lib
+  let jsPath = path.join('view', 'test', 'test.js')
+  let jsFile = fs.readFileSync(jsPath, 'utf8')
+  console.log('jsFile', jsFile);
+  fs.writeFileSync(jsPath, jsFile.replace(/mocha.run\(\)/, 'mochaSaucePlease({ xunit: false })'), 'utf8');
+
+  let htmlPath = path.join('view', 'test', 'index.html')
+  let htmlFile = fs.readFileSync(htmlPath, 'utf8')
+  fs.writeFileSync(htmlPath, htmlFile.replace(/mocha.js"><\/script>\n/, 'mocha.js"></script><script src="moduleserve/mod/__/__/node_modules/mocha-in-sauce/client"></script>'), 'utf8');
+
+  // run("cd", ["view"]);
+  let server = child.spawn("npm", ["run", "test-server"], {cwd: path.resolve('./view')});
+  setTimeout(() => {
+    runner((result) => {
+      // server.kill();
+      process.exit(result)
+    })  
+  }, 1000);
+} 
 
 function push() {
   modsAndWebsite.forEach(repo => {

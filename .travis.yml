@@ -1,0 +1,16 @@
+language: node_js
+node_js:
+- 6
+sudo: false
+env:
+  matrix:
+  - TEST_NODE=1 TEST_BROWSERS=1
+script:
+  - "npm run test:all"
+matrix:
+  fast_finish: true
+addons:
+  sauce_connect:
+    username: prosemirror-ci
+  jwt:
+    secure: ghMhIMfb1DhGnuFgWc8Ohi3m7A4htpwwk3gPiLBTO5RXGnl9dkEYs27SLvB/FmcaONlsGT6CSgIxQRgK9Nb7FY4s7hqEbrs0qG/wzPDHicupiKEAn/9QOhoY28xtUM8gnBf8UoRNMewzRY0iJJyM8feu07EwD0AqNzcs9RgSJAX3Jp1D0l4NU5E7QdaZMmc2EUNFU7HgiVnp9Ps1pUC+/l1ACBOgNg7MA1A+l7lyohvS+/DHYT8NVDPux2jLI9kAF57JN7qgRIAw5duhdMWXr56sCGLaZyf6GRp7qEeAks1A9MPJ8BtjVYYiiztHirX3I2+j0yaQ8GH/gkZ0vmn9+vvAlf2SRyX/67iggHYlD8ykYxYpIepZeNIO/Jli+hbSX898cuffKsEM8Eo+jVZm9UKXL5s7Wjirt90wM41yqUCTQuv4IuI2dv4MvSKIQ+P1yx97q3n4OPAHICD+LH4eXYqW81RJKIBDM6jPjAvzeufAtAZkhi+FIxpb8gsCOiedV2DWaIwSdJRolHA1sPN2SX9C9neVFhR/adNO4DLA1faixYJmtybdQKnuVJSLC/Q+L5rIMalZLrzurQydNl5M6jaChsd4bNitnbVve788bH8SeV7Nh7980YRWRxlwM56cxKqa9qF0Ss7JOEP7r2TGsHHNIbShh/YJ6IU+Tu4wYMs=
