@@ -135,7 +135,7 @@ function runCI() {
   let jsPath = path.join('view', 'test', 'test.js')
   let jsFile = fs.readFileSync(jsPath, 'utf8')
   console.log('jsFile', jsFile);
-  fs.writeFileSync(jsPath, jsFile.replace(/mocha.run\(\)/, 'mochaSaucePlease()'), 'utf8');
+  fs.writeFileSync(jsPath, jsFile.replace(/mocha.run\(\)/, 'mochaSaucePlease({ xunit: false })'), 'utf8');
 
   let htmlPath = path.join('view', 'test', 'index.html')
   let htmlFile = fs.readFileSync(htmlPath, 'utf8')
@@ -144,8 +144,8 @@ function runCI() {
   // run("cd", ["view"]);
   let server = child.spawn("npm", ["run", "test-server"], {cwd: path.resolve('./view')});
   setTimeout((result) => {
-    server.kill();
-    runner((result) => process.exit(result))  
+    // server.kill();
+    // runner((result) => process.exit(result))  
   }, 1000);
 } 
 
