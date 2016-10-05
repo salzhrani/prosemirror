@@ -1,4 +1,4 @@
-let MochaSauce = require("mocha-sauce")
+let MochaSauce = require("mocha-in-sauce")
 
 const browsers = [
   {
